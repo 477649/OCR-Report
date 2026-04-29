@@ -1,7 +1,7 @@
 {
   "latest_period": "2082-11",
-  "latest_url": "https://www.nrb.org.np/contents/uploads/2026/04/Falgun_2082_Publish.xlsx",
-  "downloaded_any": true,
-  "report": "reports/NRB_BFI_Growth_Report_2082-11.xlsx",
-  "raw_file_count": 24
+  "downloaded_any": false,
+  "report": "reports/Development_Bank_Industry_Analysis_2082-11.xlsx",
+  "raw_file_count": 24,
+  "investment_govt_sec_source": "C8 row SHARE & OTHER INVESTMENT"
 }
