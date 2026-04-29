@@ -8,10 +8,13 @@
   "logic": {
     "sheets_read": [
       "C8",
-      "C9"
+      "C9",
+      "C10"
     ],
     "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
     "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
-    "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others"
+    "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others",
+    "total_loan": "C10 row Total Product wise Loan",
+    "loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions"
   }
 }
