@@ -15,6 +15,8 @@ Important extraction rules:
 - Investment in Shares and Other is taken from C8 row SHARE & OTHER INVESTMENT.
 - C9 is used for P&L items.
 - C10 Product Wise section is used for total loan and product-wise loan analysis.
+- Industry Analysis Loan to customers = C10 Total Product wise Loan - C8 Loan to BFIs.
+- Industry Overall Loan block uses full C10 Total Product wise Loan without deducting Loan to BFIs.
 """
 
 from __future__ import annotations
@@ -842,7 +844,7 @@ def write_development_bank_report(
 
         overall_row = 2
         overall_row = write_overall_block(overall_row, "Deposits", "Total Deposit", num)
-        overall_row = write_overall_block(overall_row, "Loan - Loan to customers", "Loan to customers", num)
+        overall_row = write_overall_block(overall_row, "Loan", "Total loan", num)
 
         ws3 = workbook.add_worksheet("Dev_Product_Analysis")
         writer.sheets["Dev_Product_Analysis"] = ws3
@@ -984,7 +986,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
             "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others",
             "total_loan": "C10 row Total Product wise Loan",
-            "loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
+            "industry_analysis_total_loan": "C10 row Total Product wise Loan",
+            "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
+            "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
         },
     }
     state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
