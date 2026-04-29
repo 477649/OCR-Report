@@ -6,7 +6,7 @@ What this script does:
 1. Reads NRB Monthly Statistics page and downloads latest XLSX files.
 2. Reads ONLY sheets C8, C9 and C10 from each monthly workbook.
 3. Extracts bank-wise values using bank codes in the sheet header row.
-4. Builds Development Bank Industry Analysis, Industry Overall, and product-wise analysis sheets.
+4. Builds Development Bank Industry Analysis plus detailed analysis sheets: Industry Overall, Dev_Product_Analysis, Dev_Deposit_Mix, Dev_Liquidity_Investment, Dev_Profitability, Dev_Risk_Flags, and Dev_Scorecard.
 
 Important extraction rules:
 - Deposit details are taken from C8 rows under DEPOSITS:
@@ -14,7 +14,7 @@ Important extraction rules:
 - Investment in Govt. Sec is taken from C8 row a. Govt.Securities under INVESTMENT IN SECURITIES.
 - Investment in Shares and Other is taken from C8 row SHARE & OTHER INVESTMENT.
 - C9 is used for P&L items.
-- C10 Product Wise section is used for total loan and product-wise loan analysis.
+- C10 Product Wise section is used for total loan, product-wise loan analysis, product concentration, and scoring.
 - Industry Analysis Loan to customers = C10 Total Product wise Loan - C8 Loan to BFIs.
 - Industry Overall Loan block uses full C10 Total Product wise Loan without deducting Loan to BFIs.
 """
@@ -420,6 +420,15 @@ def extract_one_file(path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> 
 
         total_loan_from_c10 = value_at(c10, total_product_row, c10_col, scale=1000)
         loan_to_bfis = find_value(c8, c8_label, c8_col, [r"^\s*b\.\s*Financial\s+Institutions\b"], loan_row or 0, loan_end, scale=1000)
+        liquid_funds = find_value(
+            c8,
+            c8_label,
+            c8_col,
+            [r"^\s*\d+\s+LIQUID\s+FUNDS\s*$", r"^\s*LIQUID\s+FUNDS\s*$"],
+            0,
+            None,
+            scale=1000,
+        )
         loan_to_customers = None
         if total_loan_from_c10 is not None and loan_to_bfis is not None:
             loan_to_customers = total_loan_from_c10 - loan_to_bfis
@@ -452,6 +461,7 @@ def extract_one_file(path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> 
             "NBA": find_value(c8, c8_label, c8_col, [r"Non\s+Banking\s+Assets"], 0, None, scale=1),
             "Investment in Govt. Sec": govt_sec_value,
             "Investment in Shares and Other": find_value(c8, c8_label, c8_col, [r"^\s*\d+\s+SHARE\s*&\s*OTHER\s+INVESTMENT\s*$", r"^\s*SHARE\s*&\s*OTHER\s+INVESTMENT\s*$"], 0, None, scale=1),
+            "Liquid Funds": liquid_funds,
             "Capital": find_value(c8, c8_label, c8_col, [r"^\s*a\.\s*Paid-up\s+Capital\b", r"^\s*a\.\s*Paid\s+up\s+Capital\b"], 0, None, scale=1000),
             "General Reserve": find_value(c8, c8_label, c8_col, [r"^\s*d\.\s*General\s+Reserves\b"], 0, None, scale=1000),
             "LLP fund": find_value(c8, c8_label, c8_col, [r"Loan\s+Loss\s+Provision"], 0, None, scale=1000),
@@ -479,8 +489,18 @@ def extract_one_file(path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> 
             "Other Operating Income": find_value(c9, c9_label, c9_col, [r"^\s*4\.\s*Other\s+Operating\s+Income\b"], scale=1),
         })
 
+        data["Current Deposit Ratio"] = safe_div(data["Current"], data["Total Deposit"])
         data["Savings Deposit Ratio"] = safe_div(data["Savings"], data["Total Deposit"])
+        data["Fixed Deposit Ratio"] = safe_div(data["Fixed"], data["Total Deposit"])
+        data["Call Deposit Ratio"] = safe_div(data["Call Deposits"], data["Total Deposit"])
+        data["Other Deposit Ratio"] = safe_div(data["Others"], data["Total Deposit"])
+        data["CASA Ratio"] = safe_div(optional_sum(data["Current"], data["Savings"]), data["Total Deposit"])
         data["Loan to Deposit Ratio"] = safe_div(data["Loan to customers"], data["Total Deposit"])
+        data["Full Loan to Deposit Ratio"] = safe_div(data["Total loan"], data["Total Deposit"])
+        data["Liquid Assets"] = optional_sum(data["Liquid Funds"], None if data["Investment in Govt. Sec"] is None else data["Investment in Govt. Sec"] / 1000.0)
+        data["Liquidity Ratio"] = safe_div(data["Liquid Assets"], data["Total Deposit"])
+        data["Govt Sec to Deposit Ratio"] = safe_div(None if data["Investment in Govt. Sec"] is None else data["Investment in Govt. Sec"] / 1000.0, data["Total Deposit"])
+        data["Share Investment to Capital Ratio"] = safe_div(data["Investment in Shares and Other"], None if data["Capital"] is None else data["Capital"] * 1000.0)
         rows.append(data)
 
     return pd.DataFrame(rows)
@@ -490,6 +510,13 @@ def safe_div(a: float | None, b: float | None) -> float | None:
     if a is None or b in (None, 0) or pd.isna(a) or pd.isna(b):
         return None
     return a / b
+
+
+def optional_sum(*values: float | None) -> float | None:
+    nums = [float(v) for v in values if v is not None and not pd.isna(v)]
+    if not nums:
+        return None
+    return float(sum(nums))
 
 
 def value_for(data: pd.DataFrame, code: str, period_order: int | None, metric: str) -> float | None:
@@ -888,6 +915,479 @@ def write_development_bank_report(
         ws3.set_column(1, 10, 18)
         ws3.freeze_panes(3, 1)
 
+
+        def bank_period_change(code: str, metric: str, compare_order: int | None) -> float | None:
+            cur_val = value_for(all_data, code, current_order, metric)
+            prev_val = value_for(all_data, code, compare_order, metric)
+            if cur_val is None or prev_val is None:
+                return None
+            return cur_val - prev_val
+
+        def bank_period_pct_change(code: str, metric: str, compare_order: int | None) -> float | None:
+            cur_val = value_for(all_data, code, current_order, metric)
+            prev_val = value_for(all_data, code, compare_order, metric)
+            if cur_val is None or prev_val in (None, 0):
+                return None
+            return (cur_val / prev_val) - 1
+
+        def current_dev_values(metric: str) -> dict[str, float]:
+            vals = {}
+            for code in banks:
+                v = value_for(all_data, code, current_order, metric)
+                if v is not None:
+                    vals[code] = v
+            return vals
+
+        def current_rank(metric: str, descending: bool = True) -> dict[str, int | None]:
+            return make_rank_map(all_data, banks, current_order, metric, descending=descending)
+
+        def product_concentration(code: str) -> dict[str, Any]:
+            values = []
+            for col_name in product_cols:
+                product = col_name.split("|", 1)[1].strip()
+                if product.lower() == "total product wise loan":
+                    continue
+                v = value_for(all_data, code, current_order, col_name)
+                if v is not None:
+                    values.append((product, v))
+            values.sort(key=lambda x: x[1], reverse=True)
+            total = value_for(all_data, code, current_order, "Total loan")
+            top1_name, top1_value = (values[0] if values else (None, None))
+            top3_value = sum(v for _, v in values[:3]) if values else None
+            return {
+                "top1_name": top1_name,
+                "top1_value": top1_value,
+                "top1_ratio": safe_div(top1_value, total),
+                "top3_value": top3_value,
+                "top3_ratio": safe_div(top3_value, total),
+            }
+
+        def percentile_score(metric: str, code: str, positive: bool = True) -> float | None:
+            vals = current_dev_values(metric)
+            if code not in vals or len(vals) <= 1:
+                return None
+            sorted_vals = sorted(vals.items(), key=lambda item: item[1], reverse=positive)
+            for idx, (bank_code, _value) in enumerate(sorted_vals):
+                if bank_code == code:
+                    return 100.0 * (len(sorted_vals) - idx - 1) / (len(sorted_vals) - 1)
+            return None
+
+        def score_from_dict(vals: dict[str, float], target: str, positive: bool) -> float | None:
+            if target not in vals or len(vals) <= 1:
+                return None
+            arr = sorted(vals.items(), key=lambda item: item[1], reverse=positive)
+            for idx, (bank_code, _value) in enumerate(arr):
+                if bank_code == target:
+                    return 100.0 * (len(arr) - idx - 1) / (len(arr) - 1)
+            return None
+
+        def risk_signal(value: float | None, red_if: bool, amber_if: bool) -> str:
+            if value is None:
+                return "Data missing"
+            if red_if:
+                return "High"
+            if amber_if:
+                return "Medium"
+            return "Low"
+
+        # ------------------------------------------------------------------
+        # Dev_Deposit_Mix
+        # ------------------------------------------------------------------
+        ws4 = workbook.add_worksheet("Dev_Deposit_Mix")
+        writer.sheets["Dev_Deposit_Mix"] = ws4
+        ws4.write(0, 0, "Development Bank Deposit Mix Analysis", big_title_fmt)
+        dep_headers = [
+            "Bank", "Deposit Rank", "Total Deposit (Bn)", "Dev Share %", "Current (Bn)", "Savings (Bn)", "Fixed (Bn)",
+            "Call (Bn)", "Others (Bn)", "Current %", "Savings %", "Fixed %", "Call %", "Others %", "CASA %",
+            "MoM Deposit Change (Bn)", "YTD Deposit Change (Bn)", "YoY Deposit Change (Bn)", "MoM %", "YTD %", "YoY %",
+            "Savings Ratio Rank", "CASA Rank", "Fixed Dependency Rank", "Deposit Quality Insight"
+        ]
+        for c, h in enumerate(dep_headers):
+            ws4.write(2, c, h, blue)
+        dep_rank = current_rank("Total Deposit", True)
+        sav_rank = current_rank("Savings Deposit Ratio", True)
+        casa_rank = current_rank("CASA Ratio", True)
+        fixed_rank = current_rank("Fixed Deposit Ratio", False)
+        dev_total_deposit = agg_value(current_order, "Total Deposit", "Development Bank")
+        for r_idx, code in enumerate(banks, start=3):
+            is_kamana = code.upper() == "KAMANA"
+            cf = cell_bold if is_kamana else cell
+            nf = num_bold if is_kamana else num
+            pf = pct_bold if is_kamana else pct
+            inf = int_bold if is_kamana else int_fmt
+            bf = blank_bold if is_kamana else blank_fmt
+            current = value_for(all_data, code, current_order, "Current")
+            savings = value_for(all_data, code, current_order, "Savings")
+            fixed = value_for(all_data, code, current_order, "Fixed")
+            call = value_for(all_data, code, current_order, "Call Deposits")
+            others = value_for(all_data, code, current_order, "Others")
+            total_dep = value_for(all_data, code, current_order, "Total Deposit")
+            sav_ratio = value_for(all_data, code, current_order, "Savings Deposit Ratio")
+            fixed_ratio = value_for(all_data, code, current_order, "Fixed Deposit Ratio")
+            casa_ratio = value_for(all_data, code, current_order, "CASA Ratio")
+            insight_parts = []
+            if sav_ratio is not None:
+                insight_parts.append("strong savings base" if sav_ratio >= 0.50 else "weak savings base" if sav_ratio < 0.35 else "moderate savings base")
+            if fixed_ratio is not None:
+                insight_parts.append("high fixed dependency" if fixed_ratio > 0.45 else "low fixed dependency" if fixed_ratio < 0.30 else "balanced fixed mix")
+            if call is not None and total_dep:
+                call_ratio = call / total_dep
+                if call_ratio > 0.10:
+                    insight_parts.append("higher volatile call deposit mix")
+            values = [
+                code, dep_rank.get(code), total_dep, safe_div(total_dep, dev_total_deposit), current, savings, fixed,
+                call, others, value_for(all_data, code, current_order, "Current Deposit Ratio"), sav_ratio, fixed_ratio,
+                value_for(all_data, code, current_order, "Call Deposit Ratio"), value_for(all_data, code, current_order, "Other Deposit Ratio"), casa_ratio,
+                bank_period_change(code, "Total Deposit", period_orders.get("last_month")), bank_period_change(code, "Total Deposit", period_orders.get("last_year_end")), bank_period_change(code, "Total Deposit", period_orders.get("last_year_corresponding")),
+                bank_period_pct_change(code, "Total Deposit", period_orders.get("last_month")), bank_period_pct_change(code, "Total Deposit", period_orders.get("last_year_end")), bank_period_pct_change(code, "Total Deposit", period_orders.get("last_year_corresponding")),
+                sav_rank.get(code), casa_rank.get(code), fixed_rank.get(code), "; ".join(insight_parts)
+            ]
+            for c, v in enumerate(values):
+                if c == 0 or c == 24:
+                    ws4.write(r_idx, c, v or "", cf)
+                elif c in {1, 21, 22, 23}:
+                    write_value(ws4, r_idx, c, v, inf, bf)
+                elif c in {3, 9, 10, 11, 12, 13, 14, 18, 19, 20}:
+                    write_value(ws4, r_idx, c, v, pf, bf)
+                else:
+                    write_value(ws4, r_idx, c, v, nf, bf)
+        ws4.set_column(0, 0, 13)
+        ws4.set_column(1, len(dep_headers) - 1, 15)
+        ws4.set_column(24, 24, 40)
+        ws4.freeze_panes(3, 1)
+
+        # ------------------------------------------------------------------
+        # Dev_Liquidity_Investment
+        # ------------------------------------------------------------------
+        ws5 = workbook.add_worksheet("Dev_Liquidity_Investment")
+        writer.sheets["Dev_Liquidity_Investment"] = ws5
+        ws5.write(0, 0, "Development Bank Liquidity and Investment Analysis", big_title_fmt)
+        liq_headers = [
+            "Bank", "Liquidity Rank", "Total Deposit (Bn)", "Liquid Funds (Bn)", "Investment in Govt. Sec (Mn)",
+            "Liquid Assets Estimate (Bn)", "Liquidity Ratio", "Govt Sec / Deposit", "Share & Other Investment (Mn)",
+            "Share Investment / Capital", "Capital (Bn)", "Loan to Deposit Ratio", "Liquidity Buffer Gap vs Dev Median",
+            "Liquidity Insight"
+        ]
+        for c, h in enumerate(liq_headers):
+            ws5.write(2, c, h, blue)
+        liq_rank = current_rank("Liquidity Ratio", True)
+        liq_vals = list(current_dev_values("Liquidity Ratio").values())
+        liq_median = float(pd.Series(liq_vals).median()) if liq_vals else None
+        for r_idx, code in enumerate(banks, start=3):
+            is_kamana = code.upper() == "KAMANA"
+            cf = cell_bold if is_kamana else cell
+            nf = num_bold if is_kamana else num
+            pf = pct_bold if is_kamana else pct
+            inf = int_bold if is_kamana else int_fmt
+            bf = blank_bold if is_kamana else blank_fmt
+            liq_ratio = value_for(all_data, code, current_order, "Liquidity Ratio")
+            ldr = value_for(all_data, code, current_order, "Loan to Deposit Ratio")
+            share_inv_cap = value_for(all_data, code, current_order, "Share Investment to Capital Ratio")
+            insight = []
+            if liq_ratio is not None:
+                insight.append("strong liquidity" if liq_ratio >= 0.25 else "low liquidity" if liq_ratio < 0.18 else "moderate liquidity")
+            if ldr is not None and ldr > 0.88:
+                insight.append("high credit deployment")
+            if share_inv_cap is not None and share_inv_cap > 0.25:
+                insight.append("higher share/other investment exposure")
+            values = [
+                code, liq_rank.get(code), value_for(all_data, code, current_order, "Total Deposit"), value_for(all_data, code, current_order, "Liquid Funds"),
+                value_for(all_data, code, current_order, "Investment in Govt. Sec"), value_for(all_data, code, current_order, "Liquid Assets"),
+                liq_ratio, value_for(all_data, code, current_order, "Govt Sec to Deposit Ratio"), value_for(all_data, code, current_order, "Investment in Shares and Other"),
+                share_inv_cap, value_for(all_data, code, current_order, "Capital"), ldr,
+                None if liq_ratio is None or liq_median is None else liq_ratio - liq_median,
+                "; ".join(insight)
+            ]
+            for c, v in enumerate(values):
+                if c == 0 or c == 13:
+                    ws5.write(r_idx, c, v or "", cf)
+                elif c == 1:
+                    write_value(ws5, r_idx, c, v, inf, bf)
+                elif c in {6, 7, 9, 11, 12}:
+                    write_value(ws5, r_idx, c, v, pf, bf)
+                else:
+                    write_value(ws5, r_idx, c, v, nf, bf)
+        ws5.set_column(0, 0, 13)
+        ws5.set_column(1, len(liq_headers) - 1, 17)
+        ws5.set_column(13, 13, 42)
+        ws5.freeze_panes(3, 1)
+
+        # ------------------------------------------------------------------
+        # Dev_Profitability
+        # ------------------------------------------------------------------
+        ws6 = workbook.add_worksheet("Dev_Profitability")
+        writer.sheets["Dev_Profitability"] = ws6
+        ws6.write(0, 0, "Development Bank Profitability and Efficiency Analysis", big_title_fmt)
+        prof_headers = [
+            "Bank", "NII Rank", "Net Profit Rank", "NII (Mn)", "Net Profit (Mn)", "Commission Income (Mn)", "LLP Exp (Mn)",
+            "HR Exp (Mn)", "Opex (Mn)", "Loan W/f (Mn)", "NII / Loan", "Net Profit / Loan", "Net Profit / Deposit",
+            "Commission / NII", "LLP / NII", "HR / NII", "Opex / NII", "Cost to NII", "MoM Net Profit Change (Mn)",
+            "YoY Net Profit Change (Mn)", "Profitability Insight"
+        ]
+        for c, h in enumerate(prof_headers):
+            ws6.write(2, c, h, blue)
+        nii_rank = current_rank("NII", True)
+        profit_rank = current_rank("Net Profit", True)
+        for r_idx, code in enumerate(banks, start=3):
+            is_kamana = code.upper() == "KAMANA"
+            cf = cell_bold if is_kamana else cell
+            nf = num_bold if is_kamana else num
+            pf = pct_bold if is_kamana else pct
+            inf = int_bold if is_kamana else int_fmt
+            bf = blank_bold if is_kamana else blank_fmt
+            nii = value_for(all_data, code, current_order, "NII")
+            net_profit = value_for(all_data, code, current_order, "Net Profit")
+            loan = value_for(all_data, code, current_order, "Total loan")
+            deposit = value_for(all_data, code, current_order, "Total Deposit")
+            commission = value_for(all_data, code, current_order, "Commission and Discount Income")
+            llp_exp = value_for(all_data, code, current_order, "LLP Exp")
+            hr_exp = value_for(all_data, code, current_order, "HR Exp (excl. Bonus)")
+            opex = value_for(all_data, code, current_order, "Opex")
+            cost_to_nii = safe_div(optional_sum(hr_exp, opex), nii)
+            insight = []
+            npl = safe_div(net_profit, None if loan is None else loan * 1000)
+            if npl is not None:
+                insight.append("strong profit yield" if npl >= 0.010 else "weak profit yield" if npl < 0.006 else "moderate profit yield")
+            if cost_to_nii is not None:
+                insight.append("high operating cost load" if cost_to_nii > 0.55 else "efficient cost base" if cost_to_nii < 0.40 else "moderate cost base")
+            if llp_exp is not None and nii not in (None, 0):
+                prov = llp_exp / nii
+                if prov > 0.20:
+                    insight.append("elevated provision burden")
+            values = [
+                code, nii_rank.get(code), profit_rank.get(code), nii, net_profit, commission, llp_exp, hr_exp, opex,
+                value_for(all_data, code, current_order, "Loan W/f"), safe_div(nii, None if loan is None else loan * 1000),
+                npl, safe_div(net_profit, None if deposit is None else deposit * 1000), safe_div(commission, nii),
+                safe_div(llp_exp, nii), safe_div(hr_exp, nii), safe_div(opex, nii), cost_to_nii,
+                bank_period_change(code, "Net Profit", period_orders.get("last_month")), bank_period_change(code, "Net Profit", period_orders.get("last_year_corresponding")),
+                "; ".join(insight)
+            ]
+            for c, v in enumerate(values):
+                if c == 0 or c == 20:
+                    ws6.write(r_idx, c, v or "", cf)
+                elif c in {1, 2}:
+                    write_value(ws6, r_idx, c, v, inf, bf)
+                elif c in {10, 11, 12, 13, 14, 15, 16, 17}:
+                    write_value(ws6, r_idx, c, v, pf, bf)
+                else:
+                    write_value(ws6, r_idx, c, v, nf, bf)
+        ws6.set_column(0, 0, 13)
+        ws6.set_column(1, len(prof_headers) - 1, 16)
+        ws6.set_column(20, 20, 45)
+        ws6.freeze_panes(3, 1)
+
+        # ------------------------------------------------------------------
+        # Dev_Risk_Flags and Dev_Scorecard
+        # ------------------------------------------------------------------
+        risk_records: list[dict[str, Any]] = []
+        sav_series = pd.Series(current_dev_values("Savings Deposit Ratio"), dtype="float64")
+        liq_series = pd.Series(current_dev_values("Liquidity Ratio"), dtype="float64")
+        profit_yield_vals: dict[str, float] = {}
+        for code in banks:
+            npv = value_for(all_data, code, current_order, "Net Profit")
+            loanv = value_for(all_data, code, current_order, "Total loan")
+            py = safe_div(npv, None if loanv is None else loanv * 1000)
+            if py is not None:
+                profit_yield_vals[code] = py
+        profit_yield_series = pd.Series(profit_yield_vals, dtype="float64")
+        sav_q1 = float(sav_series.quantile(0.25)) if not sav_series.empty else None
+        liq_q1 = float(liq_series.quantile(0.25)) if not liq_series.empty else None
+        prof_q1 = float(profit_yield_series.quantile(0.25)) if not profit_yield_series.empty else None
+
+        for code in banks:
+            ldr = value_for(all_data, code, current_order, "Loan to Deposit Ratio")
+            liq = value_for(all_data, code, current_order, "Liquidity Ratio")
+            savings_ratio = value_for(all_data, code, current_order, "Savings Deposit Ratio")
+            fixed_ratio = value_for(all_data, code, current_order, "Fixed Deposit Ratio")
+            dep_yoy = bank_period_pct_change(code, "Total Deposit", period_orders.get("last_year_corresponding"))
+            loan_yoy = bank_period_pct_change(code, "Total loan", period_orders.get("last_year_corresponding"))
+            growth_gap = None if dep_yoy is None or loan_yoy is None else loan_yoy - dep_yoy
+            nii = value_for(all_data, code, current_order, "NII")
+            llp_exp = value_for(all_data, code, current_order, "LLP Exp")
+            hr_exp = value_for(all_data, code, current_order, "HR Exp (excl. Bonus)")
+            opex = value_for(all_data, code, current_order, "Opex")
+            cost_to_nii = safe_div(optional_sum(hr_exp, opex), nii)
+            llp_to_nii = safe_div(llp_exp, nii)
+            net_profit = value_for(all_data, code, current_order, "Net Profit")
+            loan = value_for(all_data, code, current_order, "Total loan")
+            profit_yield = safe_div(net_profit, None if loan is None else loan * 1000)
+            share_inv_cap = value_for(all_data, code, current_order, "Share Investment to Capital Ratio")
+            conc = product_concentration(code)
+            top3 = conc["top3_ratio"]
+
+            flags = {
+                "LDR Flag": risk_signal(ldr, ldr is not None and ldr > 0.90, ldr is not None and ldr > 0.87),
+                "Liquidity Flag": risk_signal(liq, liq is not None and ((liq_q1 is not None and liq <= liq_q1) or liq < 0.18), liq is not None and liq < 0.25),
+                "Savings Mix Flag": risk_signal(savings_ratio, savings_ratio is not None and ((sav_q1 is not None and savings_ratio <= sav_q1) or savings_ratio < 0.35), savings_ratio is not None and savings_ratio < 0.45),
+                "Fixed Deposit Flag": risk_signal(fixed_ratio, fixed_ratio is not None and fixed_ratio > 0.55, fixed_ratio is not None and fixed_ratio > 0.45),
+                "Deposit Growth Flag": risk_signal(dep_yoy, dep_yoy is not None and dep_yoy < 0, dep_yoy is not None and dep_yoy < 0.03),
+                "Loan Growth Gap Flag": risk_signal(growth_gap, growth_gap is not None and growth_gap > 0.06, growth_gap is not None and growth_gap > 0.03),
+                "Provision Burden Flag": risk_signal(llp_to_nii, llp_to_nii is not None and llp_to_nii > 0.25, llp_to_nii is not None and llp_to_nii > 0.15),
+                "Cost Efficiency Flag": risk_signal(cost_to_nii, cost_to_nii is not None and cost_to_nii > 0.60, cost_to_nii is not None and cost_to_nii > 0.50),
+                "Profitability Flag": risk_signal(profit_yield, profit_yield is not None and ((prof_q1 is not None and profit_yield <= prof_q1) or profit_yield < 0.006), profit_yield is not None and profit_yield < 0.010),
+                "Share Investment Flag": risk_signal(share_inv_cap, share_inv_cap is not None and share_inv_cap > 0.50, share_inv_cap is not None and share_inv_cap > 0.25),
+                "Product Concentration Flag": risk_signal(top3, top3 is not None and top3 > 0.75, top3 is not None and top3 > 0.60),
+            }
+            risk_score = sum(2 if v == "High" else 1 if v == "Medium" else 0 for v in flags.values())
+            risk_level = "High" if risk_score >= 10 else "Medium" if risk_score >= 5 else "Low"
+            high_flags = [k.replace(" Flag", "") for k, v in flags.items() if v == "High"]
+            med_flags = [k.replace(" Flag", "") for k, v in flags.items() if v == "Medium"]
+            summary_parts = []
+            if high_flags:
+                summary_parts.append("High: " + ", ".join(high_flags))
+            if med_flags:
+                summary_parts.append("Medium: " + ", ".join(med_flags[:4]))
+            if not summary_parts:
+                summary_parts.append("No major peer-relative risk flag")
+            risk_records.append({
+                "Bank": code,
+                "Risk Score": risk_score,
+                "Risk Level": risk_level,
+                "Loan to Deposit Ratio": ldr,
+                "Liquidity Ratio": liq,
+                "Savings Deposit Ratio": savings_ratio,
+                "Fixed Deposit Ratio": fixed_ratio,
+                "Deposit YoY %": dep_yoy,
+                "Loan YoY %": loan_yoy,
+                "Loan Growth Gap vs Deposit": growth_gap,
+                "LLP / NII": llp_to_nii,
+                "Cost to NII": cost_to_nii,
+                "Net Profit / Loan": profit_yield,
+                "Share Investment / Capital": share_inv_cap,
+                "Top Product": conc["top1_name"],
+                "Top Product %": conc["top1_ratio"],
+                "Top 3 Product Concentration": top3,
+                **flags,
+                "Risk Summary": "; ".join(summary_parts),
+            })
+
+        risk_df = pd.DataFrame(risk_records)
+        ws7 = workbook.add_worksheet("Dev_Risk_Flags")
+        writer.sheets["Dev_Risk_Flags"] = ws7
+        ws7.write(0, 0, "Development Bank Risk Flags", big_title_fmt)
+        risk_headers = list(risk_df.columns)
+        for c, h in enumerate(risk_headers):
+            ws7.write(2, c, h, blue)
+        high_fmt = workbook.add_format({"border": 1, "bg_color": "#F4CCCC"})
+        med_fmt = workbook.add_format({"border": 1, "bg_color": "#FFF2CC"})
+        low_fmt = workbook.add_format({"border": 1, "bg_color": "#D9EAD3"})
+        high_bold_fmt = workbook.add_format({"border": 1, "bold": True, "bg_color": "#F4CCCC"})
+        med_bold_fmt = workbook.add_format({"border": 1, "bold": True, "bg_color": "#FFF2CC"})
+        low_bold_fmt = workbook.add_format({"border": 1, "bold": True, "bg_color": "#D9EAD3"})
+        for r_idx, rec in enumerate(risk_records, start=3):
+            is_kamana = str(rec["Bank"]).upper() == "KAMANA"
+            for c, h in enumerate(risk_headers):
+                v = rec.get(h)
+                base_fmt = cell_bold if is_kamana else cell
+                if h in {"Risk Score"}:
+                    write_value(ws7, r_idx, c, v, int_bold if is_kamana else int_fmt, blank_bold if is_kamana else blank_fmt)
+                elif h in {"Bank", "Risk Level", "Top Product", "Risk Summary"} or h.endswith("Flag"):
+                    fmt = base_fmt
+                    if h.endswith("Flag") or h == "Risk Level":
+                        if v == "High":
+                            fmt = high_bold_fmt if is_kamana else high_fmt
+                        elif v == "Medium":
+                            fmt = med_bold_fmt if is_kamana else med_fmt
+                        elif v == "Low":
+                            fmt = low_bold_fmt if is_kamana else low_fmt
+                    ws7.write(r_idx, c, v or "", fmt)
+                elif "%" in h or "Ratio" in h or h in {"LLP / NII", "Cost to NII", "Net Profit / Loan", "Share Investment / Capital", "Top Product %", "Top 3 Product Concentration", "Loan Growth Gap vs Deposit"}:
+                    write_value(ws7, r_idx, c, v, pct_bold if is_kamana else pct, blank_bold if is_kamana else blank_fmt)
+                else:
+                    write_value(ws7, r_idx, c, v, num_bold if is_kamana else num, blank_bold if is_kamana else blank_fmt)
+        ws7.set_column(0, len(risk_headers) - 1, 16)
+        ws7.set_column(risk_headers.index("Risk Summary"), risk_headers.index("Risk Summary"), 55)
+        ws7.freeze_panes(3, 1)
+
+        score_records: list[dict[str, Any]] = []
+        nii_yield_values: dict[str, float] = {}
+        cost_values: dict[str, float] = {}
+        risk_values: dict[str, float] = {}
+        for rec in risk_records:
+            rc = str(rec["Bank"])
+            rnii = value_for(all_data, rc, current_order, "NII")
+            rloan = value_for(all_data, rc, current_order, "Total loan")
+            ryield = safe_div(rnii, None if rloan is None else rloan * 1000)
+            if ryield is not None:
+                nii_yield_values[rc] = ryield
+            rhr = value_for(all_data, rc, current_order, "HR Exp (excl. Bonus)")
+            rox = value_for(all_data, rc, current_order, "Opex")
+            rcost = safe_div(optional_sum(rhr, rox), rnii)
+            if rcost is not None:
+                cost_values[rc] = rcost
+            risk_values[rc] = rec["Risk Score"]
+
+        loan_rank_map = current_rank("Total loan", True)
+        for code in banks:
+            components = {
+                "Deposit Scale Score": percentile_score("Total Deposit", code, True),
+                "Loan Scale Score": percentile_score("Total loan", code, True),
+                "Savings Mix Score": percentile_score("Savings Deposit Ratio", code, True),
+                "CASA Score": percentile_score("CASA Ratio", code, True),
+                "Liquidity Score": percentile_score("Liquidity Ratio", code, True),
+                "Net Profit Score": percentile_score("Net Profit", code, True),
+                "NII Yield Score": score_from_dict(nii_yield_values, code, True),
+                "Cost Efficiency Score": score_from_dict(cost_values, code, False),
+                "Risk Control Score": score_from_dict(risk_values, code, False),
+            }
+            weights = {
+                "Deposit Scale Score": 0.10,
+                "Loan Scale Score": 0.10,
+                "Savings Mix Score": 0.10,
+                "CASA Score": 0.10,
+                "Liquidity Score": 0.15,
+                "Net Profit Score": 0.15,
+                "NII Yield Score": 0.10,
+                "Cost Efficiency Score": 0.10,
+                "Risk Control Score": 0.10,
+            }
+            weighted_sum = 0.0
+            weight_sum = 0.0
+            for k, wgt in weights.items():
+                if components[k] is not None:
+                    weighted_sum += components[k] * wgt
+                    weight_sum += wgt
+            overall_score = None if weight_sum == 0 else weighted_sum / weight_sum
+            risk_rec = next((r for r in risk_records if r["Bank"] == code), {})
+            grade = "A" if overall_score is not None and overall_score >= 80 else "B" if overall_score is not None and overall_score >= 65 else "C" if overall_score is not None and overall_score >= 50 else "D"
+            score_records.append({
+                "Bank": code,
+                "Overall Score": overall_score,
+                "Grade": grade,
+                "Deposit Rank": dep_rank.get(code),
+                "Loan Rank": loan_rank_map.get(code),
+                "Savings Ratio Rank": sav_rank.get(code),
+                "Liquidity Rank": liq_rank.get(code),
+                "NII Rank": nii_rank.get(code),
+                "Net Profit Rank": profit_rank.get(code),
+                "Risk Score": risk_rec.get("Risk Score"),
+                "Risk Level": risk_rec.get("Risk Level"),
+                **components,
+            })
+        score_df = pd.DataFrame(score_records)
+        score_df["Overall Rank"] = score_df["Overall Score"].rank(ascending=False, method="min")
+        score_df = score_df.sort_values(["Overall Rank", "Bank"])
+        ws8 = workbook.add_worksheet("Dev_Scorecard")
+        writer.sheets["Dev_Scorecard"] = ws8
+        ws8.write(0, 0, "Development Bank Ranking and Peer Scorecard", big_title_fmt)
+        score_headers = ["Overall Rank"] + [c for c in score_df.columns if c != "Overall Rank"]
+        for c, h in enumerate(score_headers):
+            ws8.write(2, c, h, blue)
+        score_num_fmt = workbook.add_format({"border": 1, "num_format": "0.0"})
+        score_num_bold = workbook.add_format({"border": 1, "bold": True, "num_format": "0.0"})
+        for r_idx, rec in enumerate(score_df.to_dict("records"), start=3):
+            is_kamana = str(rec["Bank"]).upper() == "KAMANA"
+            for c, h in enumerate(score_headers):
+                v = rec.get(h)
+                if h in {"Bank", "Grade", "Risk Level"}:
+                    ws8.write(r_idx, c, v or "", cell_bold if is_kamana else cell)
+                elif h.endswith("Score") or h == "Overall Score":
+                    write_value(ws8, r_idx, c, v, score_num_bold if is_kamana else score_num_fmt, blank_bold if is_kamana else blank_fmt)
+                else:
+                    write_value(ws8, r_idx, c, v, int_bold if is_kamana else int_fmt, blank_bold if is_kamana else blank_fmt)
+        ws8.set_column(0, len(score_headers) - 1, 16)
+        ws8.freeze_panes(3, 1)
+
         manifest_df.to_excel(writer, sheet_name="Manifest", index=False)
         extracted = all_data.copy()
         extracted.to_excel(writer, sheet_name="Extracted_C8_C9_C10", index=False)
@@ -982,6 +1482,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         "extracted_rows": int(len(all_data)),
         "logic": {
             "sheets_read": ["C8", "C9", "C10"],
+            "analysis_sheets": ["Industry Analysis", "Industry Overall", "Dev_Product_Analysis", "Dev_Deposit_Mix", "Dev_Liquidity_Investment", "Dev_Profitability", "Dev_Risk_Flags", "Dev_Scorecard"],
             "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
             "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
             "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others",
