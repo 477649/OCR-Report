@@ -825,6 +825,7 @@ def main() -> None:
     parser.add_argument("--months", type=int, default=24)
     parser.add_argument("--max-pages", type=int, default=8)
     parser.add_argument("--include-all-dev-banks", action="store_true", help="Include every Development Bank in mapping instead of only include_in_report=1 banks.")
+    parser.add_argument("--target-bank", default=None, help="Backward-compatible argument. The industry-analysis report includes Development Banks; this value is accepted but not used.")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     run_pipeline(args)
