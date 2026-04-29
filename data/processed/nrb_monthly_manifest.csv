@@ -1,0 +1,25 @@
+period_key,period_text,bs_year,bs_month,fiscal_year,fiscal_month,fiscal_quarter,xlsx_url,local_file,downloaded_this_run
+2080-12,"2080-12(Mid April, 2024)",2080,12,2080/81,9,3,https://www.nrb.org.np/contents/uploads/2024/05/Chaitra_2080_Publish.xlsx,data/raw/2080-12_Mid_April_2024.xlsx,True
+2081-01,"2081-01(Mid May, 2024)",2081,1,2080/81,10,4,https://www.nrb.org.np/contents/uploads/2024/06/Baisakh_2081_Publish.xlsx,data/raw/2081-01_Mid_May_2024.xlsx,True
+2081-02,"2081-02(Mid June, 2024)",2081,2,2080/81,11,4,https://www.nrb.org.np/contents/uploads/2024/07/Jestha_2081_Publish-2.xlsx,data/raw/2081-02_Mid_June_2024.xlsx,True
+2081-03,"2081-03(Mid July, 2024)",2081,3,2080/81,12,4,https://www.nrb.org.np/contents/uploads/2024/08/Asar_2081_Publish.xlsx,data/raw/2081-03_Mid_July_2024.xlsx,True
+2081-04,"2081-04(Mid Aug, 2024)",2081,4,2081/82,1,1,https://www.nrb.org.np/contents/uploads/2024/09/Shrawan_2081_Publish-1.xlsx,data/raw/2081-04_Mid_Aug_2024.xlsx,True
+2081-05,"2081-05(Mid Sep, 2024)",2081,5,2081/82,2,1,https://www.nrb.org.np/contents/uploads/2024/10/Bhadau_2081_Publish-1.xlsx,data/raw/2081-05_Mid_Sep_2024.xlsx,True
+2081-06,"2081-06(Mid Oct, 2024)",2081,6,2081/82,3,1,https://www.nrb.org.np/contents/uploads/2024/11/Ashwin_2081_Publish-1.xlsx,data/raw/2081-06_Mid_Oct_2024.xlsx,True
+2081-07,"2081-07(Mid Nov, 2024)",2081,7,2081/82,4,2,https://www.nrb.org.np/contents/uploads/2024/12/Kartik_2081_Publish.xlsx,data/raw/2081-07_Mid_Nov_2024.xlsx,True
+2081-08,"2081-08(Mid Dec, 2024)",2081,8,2081/82,5,2,https://www.nrb.org.np/contents/uploads/2025/01/Mangsir_2081_Publish-V2.xlsx,data/raw/2081-08_Mid_Dec_2024.xlsx,True
+2081-09,"2081-09(Mid Jan, 2025)",2081,9,2081/82,6,2,https://www.nrb.org.np/contents/uploads/2025/02/Poush_2081_Publish_2.xlsx,data/raw/2081-09_Mid_Jan_2025.xlsx,True
+2081-10,"2081-10(Mid Feb, 2025)",2081,10,2081/82,7,3,https://www.nrb.org.np/contents/uploads/2025/03/Magh_2081_Publish-3.xlsx,data/raw/2081-10_Mid_Feb_2025.xlsx,True
+2081-11,"2081-11(Mid Mar, 2025)",2081,11,2081/82,8,3,https://www.nrb.org.np/contents/uploads/2025/04/Falgun_2081_Publish.xlsx,data/raw/2081-11_Mid_Mar_2025.xlsx,True
+2081-12,"2081-12(Mid April, 2025)",2081,12,2081/82,9,3,https://www.nrb.org.np/contents/uploads/2025/05/Chaitra_2081_Publish.xlsx,data/raw/2081-12_Mid_April_2025.xlsx,True
+2082-01,"2082-01(Mid May, 2025)",2082,1,2081/82,10,4,https://www.nrb.org.np/contents/uploads/2025/06/Baisakh_2082_Publish-1.xlsx,data/raw/2082-01_Mid_May_2025.xlsx,True
+2082-02,"2082-02(Mid June, 2025)",2082,2,2081/82,11,4,https://www.nrb.org.np/contents/uploads/2025/07/Jestha_2082_Publish-3.xlsx,data/raw/2082-02_Mid_June_2025.xlsx,True
+2082-03,"2082-03(Mid July, 2025)",2082,3,2081/82,12,4,https://www.nrb.org.np/contents/uploads/2025/08/Asar_2082_Publish.xlsx,data/raw/2082-03_Mid_July_2025.xlsx,True
+2082-04,"2082-04(Mid Aug, 2025)",2082,4,2082/83,1,1,https://www.nrb.org.np/contents/uploads/2025/09/Saun-2082-Publish.xlsx,data/raw/2082-04_Mid_Aug_2025.xlsx,True
+2082-05,"2082-05(Mid Sep, 2025)",2082,5,2082/83,2,1,https://www.nrb.org.np/contents/uploads/2025/10/Bhadau_2082_Publish.xlsx,data/raw/2082-05_Mid_Sep_2025.xlsx,True
+2082-06,"2082-06(Mid Oct, 2025)",2082,6,2082/83,3,1,https://www.nrb.org.np/contents/uploads/2025/11/Asoj_2082_Publish.xlsx,data/raw/2082-06_Mid_Oct_2025.xlsx,True
+2082-07,"2082-07(Mid Nov, 2025)",2082,7,2082/83,4,2,https://www.nrb.org.np/contents/uploads/2025/12/Kartik_2082_Publish.xlsx,data/raw/2082-07_Mid_Nov_2025.xlsx,True
+2082-08,"2082-08(Mid Dec, 2025)",2082,8,2082/83,5,2,https://www.nrb.org.np/contents/uploads/2026/01/Mangshir_2082_Publish.xlsx,data/raw/2082-08_Mid_Dec_2025.xlsx,True
+2082-09,"2082-09(Mid Jan, 2026)",2082,9,2082/83,6,2,https://www.nrb.org.np/contents/uploads/2026/02/Poush_2082_Publish.xlsx,data/raw/2082-09_Mid_Jan_2026.xlsx,True
+2082-10,"2082-10(Mid Feb, 2026)",2082,10,2082/83,7,3,https://www.nrb.org.np/contents/uploads/2026/03/Magh_2082_Publish-2.xlsx,data/raw/2082-10_Mid_Feb_2026.xlsx,True
+2082-11,"2082-11(Mid Mar, 2026)",2082,11,2082/83,8,3,https://www.nrb.org.np/contents/uploads/2026/04/Falgun_2082_Publish.xlsx,data/raw/2082-11_Mid_Mar_2026.xlsx,True
