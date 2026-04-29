@@ -389,6 +389,20 @@ def extract_one_file(path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> 
         c8_col = c8_cols.get(code)
         c9_col = c9_cols.get(code)
 
+        govt_sec_value = find_value(
+            c8,
+            c8_label,
+            c8_col,
+            [r"^\s*a\.\s*Govt\.\s*Securities\b", r"^\s*a\.\s*Govt\s*Securities\b"],
+            inv_sec_row or 0,
+            inv_sec_end,
+            scale=1,
+        )
+        # Fallback: if the detailed a. Govt.Securities row is not present in a future NRB file,
+        # use the INVESTMENT IN SECURITIES section total rather than leaving the report blank.
+        if govt_sec_value is None:
+            govt_sec_value = value_at(c8, inv_sec_row, c8_col, scale=1)
+
         # C8 values are in million. Convert only selected balance-sheet totals to billion for report display.
         data = {
             "period_key": period.period_key,
@@ -416,9 +430,10 @@ def extract_one_file(path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> 
             "Loan to customers": find_value(c8, c8_label, c8_col, [r"^\s*a\.\s*Private\s+Sector\b"], loan_row or 0, loan_end, scale=1000),
             "Loan to BFIs": find_value(c8, c8_label, c8_col, [r"^\s*b\.\s*Financial\s+Institutions\b"], loan_row or 0, loan_end, scale=1000),
             "NBA": find_value(c8, c8_label, c8_col, [r"Non\s+Banking\s+Assets"], 0, None, scale=1),
-            # Corrected logic: Govt. securities from a. Govt.Securities, NOT from SHARE & OTHER INVESTMENT.
-            "Investment in Govt. Sec": find_value(c8, c8_label, c8_col, [r"^\s*a\.\s*Govt\.\s*Securities\b", r"^\s*a\.\s*Govt\s*Securities\b"], inv_sec_row or 0, inv_sec_end, scale=1),
-            # Corrected logic: Shares and other from C8 header row SHARE & OTHER INVESTMENT.
+            # Govt. securities are read from the INVESTMENT IN SECURITIES section
+            # using a. Govt.Securities; fallback is the section total if detail row is missing.
+            "Investment in Govt. Sec": govt_sec_value,
+            # Shares and other are read from the separate C8 row SHARE & OTHER INVESTMENT.
             "Investment in Shares and Other": find_value(c8, c8_label, c8_col, [r"^\s*\d+\s+SHARE\s*&\s*OTHER\s+INVESTMENT\s*$", r"^\s*SHARE\s*&\s*OTHER\s+INVESTMENT\s*$"], 0, None, scale=1),
             # Balance sheet items.
             "Capital": find_value(c8, c8_label, c8_col, [r"^\s*a\.\s*Paid-up\s+Capital\b", r"^\s*a\.\s*Paid\s+up\s+Capital\b"], 0, None, scale=1000),
@@ -519,14 +534,24 @@ def period_display_name(all_data: pd.DataFrame, order: int | None) -> str:
 
 
 def select_report_banks(all_data: pd.DataFrame, mapping: pd.DataFrame, include_all_dev_banks: bool = False) -> list[str]:
+    """Return report bank codes in the exact required order.
+
+    Default report order must stay:
+    Mukti, Garima, Jyoti, Shine, LumbiniDB, Kamana, Mahalaxmi, Shangrila.
+
+    If --include-all-dev-banks is used, these eight still come first and the
+    remaining Development Banks are appended in mapping-file order.
+    """
     dev = mapping[mapping["sector"].str.lower().eq("development bank")].copy()
-    if include_all_dev_banks:
-        selected = dev["bfi_code"].tolist()
-    else:
-        flagged = dev[dev["include_in_report"].astype(int).eq(1)]["bfi_code"].tolist()
-        selected = flagged if flagged else [x for x in REPORT_BANK_DEFAULT_ORDER if x in set(dev["bfi_code"])]
+    dev_codes = dev["bfi_code"].astype(str).tolist()
     existing = set(all_data["bfi_code"].astype(str))
-    return [code for code in selected if code in existing]
+
+    ordered_core = [code for code in REPORT_BANK_DEFAULT_ORDER if code in dev_codes and code in existing]
+    if not include_all_dev_banks:
+        return ordered_core
+
+    extras = [code for code in dev_codes if code not in ordered_core and code in existing]
+    return ordered_core + extras
 
 
 def make_rank_map(all_data: pd.DataFrame, codes: list[str], order: int | None, metric: str, descending: bool = True) -> dict[str, int | None]:
@@ -609,6 +634,13 @@ def write_development_bank_report(
         pct = workbook.add_format({"border": 1, "num_format": "0.00%;(0.00%);-"})
         blank_fmt = workbook.add_format({"border": 1})
 
+        # Kamana rows must be bold across every section.
+        cell_bold = workbook.add_format({"border": 1, "bold": True})
+        num_bold = workbook.add_format({"border": 1, "bold": True, "num_format": "#,##0.00;(#,##0.00);-"})
+        int_bold = workbook.add_format({"border": 1, "bold": True, "num_format": "0"})
+        pct_bold = workbook.add_format({"border": 1, "bold": True, "num_format": "0.00%;(0.00%);-"})
+        blank_bold = workbook.add_format({"border": 1, "bold": True})
+
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.set_zoom(55)
@@ -618,9 +650,11 @@ def write_development_bank_report(
         ws.write(1, 0, "FY 2082-83", title_fmt)
         ws.write(3, 0, fmt_period_title(all_data, period_orders), title_fmt)
 
-        def write_value(row: int, col: int, val: float | int | None, fmt) -> None:
+        def write_value(row: int, col: int, val: float | int | None, fmt, blank_format=None) -> None:
+            if blank_format is None:
+                blank_format = blank_fmt
             if val is None or (isinstance(val, float) and pd.isna(val)):
-                ws.write_blank(row, col, None, blank_fmt)
+                ws.write_blank(row, col, None, blank_format)
             else:
                 ws.write_number(row, col, float(val), fmt)
 
@@ -666,13 +700,19 @@ def write_development_bank_report(
             ranks = make_rank_map(all_data, banks, period_orders["current"], rank_metric, descending=True)
             for i, code in enumerate(banks):
                 r = start_row + 2 + i
-                ws.write(r, 0, code, cell)
-                write_value(r, 1, ranks.get(code), int_fmt)
+                is_kamana = code.strip().upper() == "KAMANA"
+                row_cell_fmt = cell_bold if is_kamana else cell
+                row_num_fmt = num_bold if is_kamana else num
+                row_int_fmt = int_bold if is_kamana else int_fmt
+                row_blank_fmt = blank_bold if is_kamana else blank_fmt
+
+                ws.write(r, 0, code, row_cell_fmt)
+                write_value(r, 1, ranks.get(code), row_int_fmt, row_blank_fmt)
                 col = 2
                 for block in blocks:
                     for m in metrics:
                         vals = value_by_period(all_data, code, period_orders, m)
-                        write_value(r, col, vals[block], num)
+                        write_value(r, col, vals[block], row_num_fmt, row_blank_fmt)
                         col += 1
             return start_row + 2 + len(banks) + 2
 
@@ -691,15 +731,21 @@ def write_development_bank_report(
             ranks = make_rank_map(all_data, banks, period_orders["current"], metric, descending=True)
             for i, code in enumerate(banks):
                 r = start_row + 2 + i
-                ws.write(r, 0, code, cell)
-                write_value(r, 1, ranks.get(code), int_fmt)
+                is_kamana = code.strip().upper() == "KAMANA"
+                row_cell_fmt = cell_bold if is_kamana else cell
+                row_int_fmt = int_bold if is_kamana else int_fmt
+                row_pct_fmt = pct_bold if is_kamana else pct
+                row_blank_fmt = blank_bold if is_kamana else blank_fmt
+
+                ws.write(r, 0, code, row_cell_fmt)
+                write_value(r, 1, ranks.get(code), row_int_fmt, row_blank_fmt)
                 cur = value_for(all_data, code, period_orders.get("current"), metric)
                 last = value_for(all_data, code, period_orders.get("last_month"), metric)
                 lye = value_for(all_data, code, period_orders.get("last_year_end"), metric)
                 lyc = value_for(all_data, code, period_orders.get("last_year_corresponding"), metric)
                 inc = None if cur is None or lye is None else cur - lye
                 for j, v in enumerate([cur, last, lye, lyc, inc], start=2):
-                    write_value(r, j, v, pct)
+                    write_value(r, j, v, row_pct_fmt, row_blank_fmt)
             return start_row + 2 + len(banks) + 2
 
         row = write_ratio_section(row, "Ratios (Savings Deposit)", "Savings Deposit Ratio")
