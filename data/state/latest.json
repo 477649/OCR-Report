@@ -1,7 +1,17 @@
 {
   "latest_period": "2082-11",
+  "latest_url": "https://www.nrb.org.np/contents/uploads/2026/04/Falgun_2082_Publish.xlsx",
   "downloaded_any": false,
   "report": "reports/Development_Bank_Industry_Analysis_2082-11.xlsx",
   "raw_file_count": 24,
-  "investment_govt_sec_source": "C8 row SHARE & OTHER INVESTMENT"
+  "extracted_rows": 1296,
+  "logic": {
+    "sheets_read": [
+      "C8",
+      "C9"
+    ],
+    "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
+    "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
+    "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others"
+  }
 }
