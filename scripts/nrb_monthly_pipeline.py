@@ -12,6 +12,9 @@ from bs4 import BeautifulSoup
 
 PERIOD_RE = re.compile(r"(?P<bs_year>\d{4})[-_](?P<bs_month>\d{1,2})\s*\((?P<label>[^)]*)\)")
 NUMERIC_CLEAN_RE = re.compile(r"[^0-9.\-]")
+SOURCE_URL = "https://www.nrb.org.np/category/monthly-statistics/?department=bfr"
+DEV_BANK_ORDER = ["Mukti", "Garima", "Shine", "Jyoti", "Kamana", "LumbiniDB", "Shangrila", "Mahalaxmi"]
+INVESTMENT_GOVT_SEC_SOURCE_LABEL = r"\bSHARE\s*&\s*OTHER\s+INVESTMENT\b"
 
 @dataclass(frozen=True)
 class MonthlyFile:
@@ -36,9 +39,7 @@ class MonthlyFile:
 
 
 def fetch_html(url: str) -> str:
-    headers = {
-        "User-Agent": "Mozilla/5.0 NRB monthly statistics workflow (+https://github.com/)"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 NRB monthly statistics workflow (+https://github.com/)"}
     response = requests.get(url, headers=headers, timeout=45)
     response.raise_for_status()
     return response.text
@@ -79,7 +80,9 @@ def parse_monthly_files(start_url: str, max_pages: int = 8, months: int = 24) ->
         next_link = None
         for a in anchors:
             if a.get_text(" ", strip=True).lower() == "next":
-                next_link = urljoin(next_url, a.get("href"))
+                href = a.get("href")
+                if href:
+                    next_link = urljoin(next_url, href)
                 break
         next_url = next_link
     return sorted(found.values(), key=lambda item: item.order, reverse=True)[:months]
@@ -114,17 +117,27 @@ def fiscal_fields(bs_year: int, bs_month: int) -> dict[str, int | str]:
 
 def load_mapping(mapping_path: Path) -> pd.DataFrame:
     mapping = pd.read_csv(mapping_path)
-    mapping["bfi_code_norm"] = mapping["bfi_code"].astype(str).str.strip().str.upper()
+    required = {"bfi_code", "sector", "full_name"}
+    missing = required.difference(mapping.columns)
+    if missing:
+        raise ValueError(f"Mapping file missing columns: {sorted(missing)}")
+    mapping["bfi_code"] = mapping["bfi_code"].astype(str).str.strip()
+    mapping["bfi_code_norm"] = mapping["bfi_code"].str.upper()
     return mapping
 
 
-def clean_metric(value) -> str | None:
+def clean_text(value) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
-        return None
-    text = str(value).replace("\n", " ").strip()
+        return ""
+    text = str(value).replace("\n", " ").replace("\xa0", " ").strip()
     text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"^\d+[.)\-\s]+", "", text).strip()
-    return text or None
+    return text
+
+
+def normalize_label(value) -> str:
+    text = clean_text(value)
+    text = re.sub(r"^\d+(?:\.\d+)*[.)\-\s]+", "", text).strip()
+    return text
 
 
 def to_number(value):
@@ -133,7 +146,7 @@ def to_number(value):
     if isinstance(value, (int, float)):
         return float(value)
     text = str(value).strip()
-    if text in {"", "-", "--", "N/A", "NA"}:
+    if text in {"", "-", "--", "N/A", "NA", "n/a"}:
         return None
     neg = text.startswith("(") and text.endswith(")")
     text = NUMERIC_CLEAN_RE.sub("", text)
@@ -146,227 +159,415 @@ def to_number(value):
         return None
 
 
+def safe_subtract(a, b):
+    if a is None or pd.isna(a):
+        return None
+    if b is None or pd.isna(b):
+        return a
+    return a - b
+
+
+def mn_to_bn(value):
+    if value is None or pd.isna(value):
+        return None
+    return value / 1000.0
+
+
+def safe_ratio(numerator, denominator):
+    if numerator is None or denominator is None or pd.isna(numerator) or pd.isna(denominator) or denominator == 0:
+        return None
+    return numerator / denominator
+
+
 def row_bank_match_count(row_values: list, code_norms: set[str]) -> int:
     count = 0
     for value in row_values:
-        text = clean_metric(value)
-        if not text:
-            continue
-        if text.strip().upper() in code_norms:
+        text = clean_text(value).upper()
+        if text in code_norms:
             count += 1
     return count
 
 
-def extract_bank_metric_long(xlsx_path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> pd.DataFrame:
-    sheets = pd.read_excel(xlsx_path, sheet_name=None, header=None, engine="openpyxl")
+def find_bank_header(df: pd.DataFrame, mapping: pd.DataFrame) -> tuple[int, list[tuple[int, str]], int]:
     code_norms = set(mapping["bfi_code_norm"])
-    all_rows = []
-    for sheet_name, df in sheets.items():
-        if df.empty:
+    header_row = None
+    best_count = 0
+    for r in range(min(40, len(df))):
+        count = row_bank_match_count(df.iloc[r].tolist(), code_norms)
+        if count > best_count:
+            best_count = count
+            header_row = r
+    if header_row is None or best_count < 5:
+        raise ValueError("Could not detect BFI code header row. Check C8/C9 sheet format or mapping codes.")
+    bank_cols: list[tuple[int, str]] = []
+    for c, value in enumerate(df.iloc[header_row].tolist()):
+        text = clean_text(value).upper()
+        if text in code_norms:
+            original = mapping.loc[mapping["bfi_code_norm"] == text, "bfi_code"].iloc[0]
+            bank_cols.append((c, original))
+    first_bank_col = min(c for c, _ in bank_cols)
+    return header_row, bank_cols, first_bank_col
+
+
+def label_for_row(df: pd.DataFrame, row_idx: int, first_bank_col: int) -> str:
+    parts = []
+    for c in range(first_bank_col):
+        text = normalize_label(df.iat[row_idx, c])
+        if text:
+            parts.append(text)
+    return " | ".join(parts)
+
+
+def find_value(df: pd.DataFrame, bank_col: int, first_bank_col: int, include_patterns: list[str], exclude_patterns: list[str] | None = None):
+    exclude_patterns = exclude_patterns or []
+    candidates = []
+    for r in range(len(df)):
+        label = label_for_row(df, r, first_bank_col)
+        if not label:
             continue
-        header_row = None
-        best_count = 0
-        scan_rows = min(30, len(df))
-        for r in range(scan_rows):
-            count = row_bank_match_count(df.iloc[r].tolist(), code_norms)
-            if count > best_count:
-                best_count = count
-                header_row = r
-        if header_row is None or best_count < 5:
-            continue
-        bank_cols = []
-        for c, value in enumerate(df.iloc[header_row].tolist()):
-            text = clean_metric(value)
-            if text and text.upper() in code_norms:
-                original = mapping.loc[mapping["bfi_code_norm"] == text.upper(), "bfi_code"].iloc[0]
-                bank_cols.append((c, original))
-        if not bank_cols:
-            continue
-        first_bank_col = min(c for c, _ in bank_cols)
-        for r in range(header_row + 1, len(df)):
-            label_parts = []
-            for c in range(0, first_bank_col):
-                part = clean_metric(df.iat[r, c])
-                if part:
-                    label_parts.append(part)
-            metric = " | ".join(label_parts)
-            if not metric or len(metric) < 2:
+        if all(re.search(p, label, flags=re.IGNORECASE) for p in include_patterns):
+            if any(re.search(p, label, flags=re.IGNORECASE) for p in exclude_patterns):
                 continue
-            if metric.lower().startswith("note"):
-                break
-            for c, code in bank_cols:
-                value = to_number(df.iat[r, c]) if c < df.shape[1] else None
-                if value is None:
-                    continue
-                fields = fiscal_fields(period.bs_year, period.bs_month)
-                all_rows.append({
-                    "period_key": period.period_key,
-                    "period_text": period.period_text,
-                    "bs_year": period.bs_year,
-                    "bs_month": period.bs_month,
-                    "period_order": period.order,
-                    "fiscal_year": fields["fiscal_year"],
-                    "fiscal_year_start": fields["fiscal_year_start"],
-                    "fiscal_month": fields["fiscal_month"],
-                    "fiscal_quarter": fields["fiscal_quarter"],
-                    "bfi_code": code,
-                    "metric": metric,
-                    "value": value,
-                    "source_sheet": str(sheet_name),
-                    "source_file": xlsx_path.name,
-                })
-    if not all_rows:
-        return pd.DataFrame()
-    out = pd.DataFrame(all_rows)
-    out = out.merge(mapping.drop(columns=["bfi_code_norm"]), on="bfi_code", how="left")
-    return out
+            value = to_number(df.iat[r, bank_col]) if bank_col < df.shape[1] else None
+            candidates.append((r, label, value))
+    for _, _, value in candidates:
+        if value is not None:
+            return value
+    return None
 
 
-def metric_bucket(metric: str) -> str:
-    m = metric.lower()
-    if "deposit" in m and "total" in m:
-        return "Total Deposit"
-    if ("loan" in m or "credit" in m) and "total" in m:
-        return "Total Loan/Credit"
-    if "net profit" in m or "profit" in m:
-        return "Net Profit"
-    if "liquid" in m:
-        return "Liquid Assets"
-    if "investment" in m:
-        return "Investment"
-    if "asset" in m and "total" in m:
-        return "Total Assets"
-    if "capital" in m:
-        return "Capital"
-    if "borrowing" in m:
-        return "Borrowing"
-    return "Other"
+def get_sheet(workbook_path: Path, sheet_name: str) -> pd.DataFrame:
+    try:
+        return pd.read_excel(workbook_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+    except ValueError as exc:
+        raise ValueError(f"Required sheet {sheet_name} not found in {workbook_path.name}") from exc
 
 
-def safe_pct(current, previous):
-    if previous is None or pd.isna(previous) or previous == 0 or current is None or pd.isna(current):
+def extract_monthly_c8_c9(workbook_path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> pd.DataFrame:
+    c8 = get_sheet(workbook_path, "C8")
+    c9 = get_sheet(workbook_path, "C9")
+    _, c8_bank_cols, c8_first = find_bank_header(c8, mapping)
+    _, c9_bank_cols, c9_first = find_bank_header(c9, mapping)
+    c8_cols = {code.upper(): col for col, code in c8_bank_cols}
+    c9_cols = {code.upper(): col for col, code in c9_bank_cols}
+    fields = fiscal_fields(period.bs_year, period.bs_month)
+    rows = []
+    for _, mrow in mapping.iterrows():
+        code = mrow["bfi_code"]
+        code_norm = str(code).upper()
+        if code_norm not in c8_cols:
+            continue
+        c8_col = c8_cols[code_norm]
+        c9_col = c9_cols.get(code_norm)
+        deposit_total = find_value(c8, c8_col, c8_first, [r"\bDEPOSITS\b"], [r"Current|Saving|Fixed|Call|Certificate|Others|Domestic|Foreign"])
+        current_deposit = find_value(c8, c8_col, c8_first, [r"Current\s+Deposit"])
+        saving_deposit = find_value(c8, c8_col, c8_first, [r"Saving\s+Account"])
+        fixed_deposit = find_value(c8, c8_col, c8_first, [r"Fixed\s+Account"], [r"Up to|3 to 6|6 months|Above"])
+        call_deposit = find_value(c8, c8_col, c8_first, [r"Call\s+Deposit"])
+        deposit_others = None
+        if deposit_total is not None:
+            known = sum(v for v in [current_deposit, saving_deposit, fixed_deposit, call_deposit] if v is not None)
+            deposit_others = deposit_total - known
+        total_loan = find_value(c8, c8_col, c8_first, [r"LOANS\s*&\s*ADVANCES"], [r"Collected|Against|Private|Financial|Government|Bills|Import|Accrued|Staff"])
+        loan_to_bfis = find_value(c8, c8_col, c8_first, [r"Financial\s+Institutions"], [r"Accrued|Other"])
+        loan_to_customers = safe_subtract(total_loan, loan_to_bfis)
+        nba = find_value(c8, c8_col, c8_first, [r"Non[-\s]*Banking\s+Assets"])
+        investment_govt_sec = find_value(c8, c8_col, c8_first, [INVESTMENT_GOVT_SEC_SOURCE_LABEL])
+        investment_shares_other = find_value(c8, c8_col, c8_first, [r"SHARE\s*&\s*OTHER\s+INVESTMENT"])
+        cash_balance = find_value(c8, c8_col, c8_first, [r"Cash\s+Balance"])
+        bank_balance = find_value(c8, c8_col, c8_first, [r"Bank\s+Balance"])
+        money_at_call = find_value(c8, c8_col, c8_first, [r"Money\s+at\s+Call"])
+        paid_up_capital = find_value(c8, c8_col, c8_first, [r"Paid[-\s]*up\s+Capital"])
+        general_reserve = find_value(c8, c8_col, c8_first, [r"General\s+Reserves?"])
+        llp_fund = find_value(c8, c8_col, c8_first, [r"Loan\s+Loss\s+Provision"], [r"General|Special|Additional"])
+        debenture = find_value(c8, c8_col, c8_first, [r"Bonds\s+and\s+Securities|Debenture"])
+        interest_income = interest_expense = commission_income = provision_risk = write_back = staff_exp = office_opex = loan_writeoff = net_profit = other_op_income = None
+        if c9_col is not None:
+            interest_expense = find_value(c9, c9_col, c9_first, [r"Interest\s+Expense|On\s+Deposit\s+Liabilities"], [r"Income"])
+            interest_income = find_value(c9, c9_col, c9_first, [r"Interest\s+Income"], [r"On\s+Loans|On\s+Investment|On\s+Agency|On\s+Call|On\s+Others"])
+            commission_income = find_value(c9, c9_col, c9_first, [r"Commission\s+and\s+Discount|Commission\s*&\s*Discount"])
+            if commission_income is None:
+                bills_discount = find_value(c9, c9_col, c9_first, [r"Bills\s+Purchase\s+and\s+Discount"])
+                commission_only = find_value(c9, c9_col, c9_first, [r"Commission"], [r"Expense"])
+                commission_income = sum(v for v in [bills_discount, commission_only] if v is not None) if any(v is not None for v in [bills_discount, commission_only]) else None
+            provision_risk = find_value(c9, c9_col, c9_first, [r"Provision\s+for\s+Risk"])
+            write_back = find_value(c9, c9_col, c9_first, [r"Write\s+Back\s+from\s+Provisions\s+for\s+loss"])
+            staff_exp = find_value(c9, c9_col, c9_first, [r"Staff\s+Expense"])
+            office_opex = find_value(c9, c9_col, c9_first, [r"Office\s+Operating\s+Expenses"])
+            loan_writeoff = find_value(c9, c9_col, c9_first, [r"Loan\s+Written\s+Off"])
+            net_profit = find_value(c9, c9_col, c9_first, [r"Net\s+Profit"])
+            other_op_income = find_value(c9, c9_col, c9_first, [r"Other\s+Operating\s+Income"])
+        nii = None
+        if interest_income is not None and interest_expense is not None:
+            nii = interest_income - interest_expense
+        llp_exp = None
+        if provision_risk is not None:
+            llp_exp = provision_risk - (write_back or 0)
+        liquid_assets_mn = sum(v for v in [cash_balance, bank_balance, money_at_call, investment_govt_sec] if v is not None)
+        record = {
+            "period_key": period.period_key,
+            "period_text": period.period_text,
+            "bs_year": period.bs_year,
+            "bs_month": period.bs_month,
+            "period_order": period.order,
+            "fiscal_year": fields["fiscal_year"],
+            "fiscal_year_start": fields["fiscal_year_start"],
+            "fiscal_month": fields["fiscal_month"],
+            "fiscal_quarter": fields["fiscal_quarter"],
+            "bfi_code": code,
+            "sector": mrow["sector"],
+            "full_name": mrow["full_name"],
+            "total_deposit": mn_to_bn(deposit_total),
+            "current_deposit": mn_to_bn(current_deposit),
+            "saving_deposit": mn_to_bn(saving_deposit),
+            "fixed_deposit": mn_to_bn(fixed_deposit),
+            "call_deposit": mn_to_bn(call_deposit),
+            "deposit_others": mn_to_bn(deposit_others),
+            "total_loan": mn_to_bn(total_loan),
+            "loan_to_customers": mn_to_bn(loan_to_customers),
+            "loan_to_bfis": mn_to_bn(loan_to_bfis),
+            "nba_mn": nba,
+            "investment_govt_sec_mn": investment_govt_sec,
+            "investment_shares_other_mn": investment_shares_other,
+            "cash_balance_mn": cash_balance,
+            "bank_balance_mn": bank_balance,
+            "money_at_call_mn": money_at_call,
+            "liquid_assets_mn": liquid_assets_mn if liquid_assets_mn != 0 else None,
+            "capital": mn_to_bn(paid_up_capital),
+            "general_reserve": mn_to_bn(general_reserve),
+            "llp_fund": mn_to_bn(llp_fund),
+            "debenture": mn_to_bn(debenture),
+            "nii_mn": nii,
+            "commission_income_mn": commission_income,
+            "llp_exp_mn": llp_exp,
+            "hr_exp_excl_bonus_mn": staff_exp,
+            "opex_mn": office_opex,
+            "loan_writeoff_mn": loan_writeoff,
+            "net_profit_mn": net_profit,
+            "other_operating_income_mn": other_op_income,
+            "savings_deposit_ratio": safe_ratio(mn_to_bn(saving_deposit), mn_to_bn(deposit_total)),
+            "loan_to_deposit_ratio": safe_ratio(mn_to_bn(total_loan), mn_to_bn(deposit_total)),
+            "liquidity_ratio": safe_ratio(liquid_assets_mn, deposit_total),
+            "source_file": workbook_path.name,
+        }
+        rows.append(record)
+    return pd.DataFrame(rows)
+
+
+def select_reference_periods(periods: list[MonthlyFile]) -> dict[str, MonthlyFile | None]:
+    ordered = sorted(periods, key=lambda p: p.order, reverse=True)
+    current = ordered[0] if ordered else None
+    if current is None:
+        return {"current": None, "last_month": None, "last_year_end": None, "last_year_corresponding": None}
+    by_order = {p.order: p for p in periods}
+    last_month = by_order.get(current.order - 1)
+    last_year_corresponding = by_order.get(current.order - 12)
+    last_year_end = None
+    for p in sorted(periods, key=lambda x: x.order, reverse=True):
+        if p.order < current.order and p.bs_month == 3:
+            last_year_end = p
+            break
+    return {
+        "current": current,
+        "last_month": last_month,
+        "last_year_end": last_year_end,
+        "last_year_corresponding": last_year_corresponding,
+    }
+
+
+def rank_within_dev(df: pd.DataFrame, period_key: str, metric: str, ascending: bool = False) -> dict[str, int]:
+    sub = df[(df["period_key"] == period_key) & (df["sector"].str.upper() == "DEVELOPMENT BANK")].copy()
+    sub = sub.dropna(subset=[metric])
+    if sub.empty:
+        return {}
+    sub["rank"] = sub[metric].rank(ascending=ascending, method="min").astype(int)
+    return dict(zip(sub["bfi_code"], sub["rank"]))
+
+
+def period_value(df: pd.DataFrame, period: MonthlyFile | None, bank: str, metric: str):
+    if period is None:
         return None
-    return (current / previous) - 1
+    sub = df[(df["period_key"] == period.period_key) & (df["bfi_code"].str.upper() == bank.upper())]
+    if sub.empty or metric not in sub.columns:
+        return None
+    value = sub.iloc[0][metric]
+    if pd.isna(value):
+        return None
+    return value
 
 
-def compute_growth(long_df: pd.DataFrame) -> pd.DataFrame:
-    if long_df.empty:
-        return long_df
-    df = long_df.copy()
-    df["metric_bucket"] = df["metric"].apply(metric_bucket)
-    key_cols = ["bfi_code", "metric"]
-    df = df.sort_values(["bfi_code", "metric", "period_order"])
-    df["mom_growth"] = df.groupby(key_cols)["value"].pct_change(1)
-    df["yoy_growth"] = df.groupby(key_cols)["value"].pct_change(12)
-    df["previous_value"] = df.groupby(key_cols)["value"].shift(1)
-    lookup = df.set_index(["bfi_code", "metric", "period_order"])["value"].to_dict()
-    qtd_values = []
-    ytd_values = []
-    for row in df.itertuples(index=False):
-        bs_year = int(row.bs_year)
-        bs_month = int(row.bs_month)
-        fy_month = int(row.fiscal_month)
-        period_order = int(row.period_order)
-        q_start_fy_month = ((int(row.fiscal_quarter) - 1) * 3) + 1
-        months_back_q = fy_month - q_start_fy_month + 1
-        prior_q_end_order = period_order - months_back_q
-        months_back_y = fy_month
-        prior_y_end_order = period_order - months_back_y
-        key_q = (row.bfi_code, row.metric, prior_q_end_order)
-        key_y = (row.bfi_code, row.metric, prior_y_end_order)
-        qtd_values.append(safe_pct(row.value, lookup.get(key_q)))
-        ytd_values.append(safe_pct(row.value, lookup.get(key_y)))
-    df["qtd_growth_vs_prior_q_end"] = qtd_values
-    df["ytd_growth_vs_prior_fy_end"] = ytd_values
-    return df
+def change(current, reference):
+    if current is None or reference is None or pd.isna(current) or pd.isna(reference):
+        return None
+    return current - reference
 
 
-def latest_rankings(growth_df: pd.DataFrame) -> pd.DataFrame:
-    if growth_df.empty:
-        return growth_df
-    latest_order = growth_df["period_order"].max()
-    latest = growth_df[(growth_df["period_order"] == latest_order) & (growth_df["metric_bucket"] != "Other")].copy()
-    latest["value_rank_desc"] = latest.groupby("metric")["value"].rank(ascending=False, method="min")
-    latest["yoy_rank_desc"] = latest.groupby("metric")["yoy_growth"].rank(ascending=False, method="min")
-    latest["mom_rank_desc"] = latest.groupby("metric")["mom_growth"].rank(ascending=False, method="min")
-    return latest
+def build_block_rows(df: pd.DataFrame, periods: dict, banks: list[str], metrics: list[tuple[str, str]], rank_metric: str) -> list[list]:
+    current = periods["current"]
+    last_month = periods["last_month"]
+    last_year_end = periods["last_year_end"]
+    last_year_corresponding = periods["last_year_corresponding"]
+    ranks = rank_within_dev(df, current.period_key, rank_metric) if current else {}
+    rows = []
+    for bank in banks:
+        row = [bank, ranks.get(bank)]
+        current_values = [period_value(df, current, bank, metric) for metric, _ in metrics]
+        last_month_values = [period_value(df, last_month, bank, metric) for metric, _ in metrics]
+        year_end_values = [period_value(df, last_year_end, bank, metric) for metric, _ in metrics]
+        last_year_values = [period_value(df, last_year_corresponding, bank, metric) for metric, _ in metrics]
+        mom = [change(c, p) for c, p in zip(current_values, last_month_values)]
+        ytd = [change(c, p) for c, p in zip(current_values, year_end_values)]
+        yoy = [change(c, p) for c, p in zip(current_values, last_year_values)]
+        row.extend(current_values)
+        row.extend(last_month_values)
+        row.extend(year_end_values)
+        row.extend(mom)
+        row.extend(ytd)
+        row.extend(last_year_values)
+        row.extend(yoy)
+        rows.append(row)
+    return rows
 
 
-def sector_summary(growth_df: pd.DataFrame) -> pd.DataFrame:
-    if growth_df.empty:
-        return growth_df
-    latest_order = growth_df["period_order"].max()
-    latest = growth_df[(growth_df["period_order"] == latest_order) & (growth_df["metric_bucket"] != "Other")]
-    cols = ["sector", "metric_bucket", "value", "mom_growth", "yoy_growth", "qtd_growth_vs_prior_q_end", "ytd_growth_vs_prior_fy_end"]
-    return latest[cols].groupby(["sector", "metric_bucket"], dropna=False).agg(
-        bank_count=("value", "count"),
-        total_value=("value", "sum"),
-        median_value=("value", "median"),
-        median_mom_growth=("mom_growth", "median"),
-        median_yoy_growth=("yoy_growth", "median"),
-        median_qtd_growth=("qtd_growth_vs_prior_q_end", "median"),
-        median_ytd_growth=("ytd_growth_vs_prior_fy_end", "median"),
-    ).reset_index()
+def build_ratio_rows(df: pd.DataFrame, periods: dict, banks: list[str], metric: str, rank_metric: str) -> list[list]:
+    current = periods["current"]
+    last_month = periods["last_month"]
+    last_year_end = periods["last_year_end"]
+    last_year_corresponding = periods["last_year_corresponding"]
+    ranks = rank_within_dev(df, current.period_key, rank_metric, ascending=False) if current else {}
+    rows = []
+    for bank in banks:
+        c = period_value(df, current, bank, metric)
+        lm = period_value(df, last_month, bank, metric)
+        ye = period_value(df, last_year_end, bank, metric)
+        ly = period_value(df, last_year_corresponding, bank, metric)
+        rows.append([bank, ranks.get(bank), c, lm, ye, ly, change(c, ye)])
+    return rows
 
 
-def write_report(growth_df: pd.DataFrame, manifest_df: pd.DataFrame, target_bank: str, output_path: Path):
+def set_section_header(ws, row, label, groups, formats):
+    ws.merge_range(row, 0, row, 1, label, formats["section"])
+    col = 2
+    for title, span, fmt_key in groups:
+        ws.merge_range(row, col, row, col + span - 1, title, formats[fmt_key])
+        col += span
+
+
+def write_table(ws, start_row, section_label, unit_label, metrics, data_rows, formats, is_ratio=False):
+    groups = [
+        ("This Month", len(metrics), "orange"),
+        ("Last Month", len(metrics), "blue"),
+        ("Last Year End", len(metrics), "green"),
+        ("MoM Change (Rs.)", len(metrics), "orange"),
+        ("YTD Change (Rs.)", len(metrics), "blue"),
+        ("Last Year Corresponding", len(metrics), "blue"),
+        ("YoY Change", len(metrics), "blue"),
+    ]
+    if is_ratio:
+        ws.write(start_row, 0, section_label, formats["subsection"])
+        start_row += 1
+        headers = [unit_label, "Rank", "Current Month", "Last Month", "Ashadh", "Corresponding Year", "Increment % this year"]
+        ws.write_row(start_row, 0, headers, formats["header_blue"])
+        for r_offset, row_values in enumerate(data_rows, 1):
+            ws.write_row(start_row + r_offset, 0, row_values[:2], formats["body"])
+            ws.write_row(start_row + r_offset, 2, row_values[2:], formats["pct"])
+        return start_row + len(data_rows) + 3
+    set_section_header(ws, start_row, section_label, groups, formats)
+    headers = [unit_label, "Rank"] + [display for _group in range(7) for _, display in metrics]
+    ws.write_row(start_row + 1, 0, headers, formats["header_blue"])
+    for r_offset, row_values in enumerate(data_rows, 2):
+        ws.write_row(start_row + r_offset, 0, row_values[:2], formats["body"])
+        for c, value in enumerate(row_values[2:], 2):
+            ws.write_number(start_row + r_offset, c, value, formats["number"]) if isinstance(value, (int, float)) and not pd.isna(value) else ws.write(start_row + r_offset, c, "-", formats["body"])
+    return start_row + len(data_rows) + 4
+
+
+def write_industry_report(df: pd.DataFrame, manifest_df: pd.DataFrame, output_path: Path, target_bank: str):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    rankings = latest_rankings(growth_df)
-    summary = sector_summary(growth_df)
-    latest_order = growth_df["period_order"].max() if not growth_df.empty else None
-    latest_period = growth_df.loc[growth_df["period_order"] == latest_order, "period_key"].iloc[0] if latest_order else "N/A"
-    bank_df = growth_df[growth_df["bfi_code"].str.upper() == target_bank.upper()].copy() if not growth_df.empty else pd.DataFrame()
-    latest_bank = bank_df[bank_df["period_order"] == latest_order].copy() if latest_order and not bank_df.empty else pd.DataFrame()
+    periods_available = [MonthlyFile(row.period_text, int(row.bs_year), int(row.bs_month), "", "") for row in manifest_df.itertuples(index=False)]
+    periods = select_reference_periods(periods_available)
+    current = periods["current"]
+    if current is None:
+        raise RuntimeError("No current period available for report.")
+    dev_df = df[df["sector"].str.upper() == "DEVELOPMENT BANK"].copy()
+    banks = [b for b in DEV_BANK_ORDER if b.upper() in set(dev_df["bfi_code"].str.upper())]
+    if not banks:
+        banks = dev_df[dev_df["period_key"] == current.period_key].sort_values("total_deposit", ascending=False)["bfi_code"].tolist()
+    workbook = None
     with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
         workbook = writer.book
-        title_fmt = workbook.add_format({"bold": True, "font_size": 16, "font_color": "#1f4e79"})
-        header_fmt = workbook.add_format({"bold": True, "bg_color": "#DDEBF7", "border": 1})
-        pct_fmt = workbook.add_format({"num_format": "0.00%"})
-        num_fmt = workbook.add_format({"num_format": "#,##0.00"})
-        text_fmt = workbook.add_format({"text_wrap": True, "valign": "top"})
-        dashboard_rows = [
-            ["NRB Monthly BFI Automated Growth Report", ""],
-            ["Latest period", latest_period],
-            ["Target bank", target_bank],
-            ["Files tracked", len(manifest_df)],
-            ["Notes", "Growth is computed from available monthly snapshots: MoM, YoY, QTD vs prior quarter-end, and YTD vs prior fiscal-year-end."],
+        formats = {
+            "title": workbook.add_format({"bold": True, "font_size": 11}),
+            "section": workbook.add_format({"bold": True, "bg_color": "#F4B183", "border": 1, "align": "center", "valign": "vcenter"}),
+            "subsection": workbook.add_format({"bold": True, "font_size": 10}),
+            "orange": workbook.add_format({"bold": True, "bg_color": "#F4B183", "border": 1, "align": "center"}),
+            "blue": workbook.add_format({"bold": True, "bg_color": "#0070C0", "font_color": "#FFFFFF", "border": 1, "align": "center", "valign": "vcenter"}),
+            "green": workbook.add_format({"bold": True, "bg_color": "#70AD47", "font_color": "#FFFFFF", "border": 1, "align": "center"}),
+            "header_blue": workbook.add_format({"bold": True, "bg_color": "#0070C0", "font_color": "#FFFFFF", "border": 1, "align": "center", "valign": "vcenter", "text_wrap": True}),
+            "body": workbook.add_format({"border": 1, "font_size": 8}),
+            "number": workbook.add_format({"border": 1, "font_size": 8, "num_format": "#,##0.00;(#,##0.00);-"}),
+            "pct": workbook.add_format({"border": 1, "font_size": 8, "num_format": "0.00%;(0.00%);-"}),
+        }
+        ws = workbook.add_worksheet("Industry_Analysis")
+        writer.sheets["Industry_Analysis"] = ws
+        ws.write(0, 0, "Kamana Sewa Bikas Bank Ltd.", formats["title"])
+        ws.write(1, 0, f"FY {current.bs_year}-{str(current.bs_year + 1)[-2:]}", formats["title"])
+        ws.write(3, 0, f"Industry Analysis {current.period_text}", formats["title"])
+        deposit_metrics = [
+            ("total_deposit", "Total Deposit"),
+            ("current_deposit", "Current"),
+            ("saving_deposit", "Savings"),
+            ("fixed_deposit", "Fixed"),
+            ("call_deposit", "Call Deposits"),
+            ("deposit_others", "Others"),
         ]
-        dash = pd.DataFrame(dashboard_rows, columns=["Item", "Value"])
-        dash.to_excel(writer, sheet_name="Dashboard", index=False, startrow=0)
-        ws = writer.sheets["Dashboard"]
-        ws.write(0, 0, dashboard_rows[0][0], title_fmt)
-        ws.set_column("A:A", 34)
-        ws.set_column("B:B", 95, text_fmt)
-        if not latest_bank.empty:
-            show_cols = ["metric_bucket", "metric", "value", "mom_growth", "yoy_growth", "qtd_growth_vs_prior_q_end", "ytd_growth_vs_prior_fy_end", "sector", "full_name"]
-            latest_bank[show_cols].sort_values(["metric_bucket", "metric"]).head(60).to_excel(writer, sheet_name="Dashboard", index=False, startrow=7)
-            for col_num, value in enumerate(show_cols):
-                ws.write(7, col_num, value, header_fmt)
-            ws.set_column("C:C", 16, num_fmt)
-            ws.set_column("D:G", 16, pct_fmt)
-            ws.set_column("B:B", 45, text_fmt)
-        dashboard_source = pd.DataFrame({
-            "source": ["NRB Monthly Statistics"],
-            "url": ["https://www.nrb.org.np/category/monthly-statistics/?department=bfr"],
-        })
-        dashboard_source.to_excel(writer, sheet_name="Source", index=False)
-        growth_df.to_excel(writer, sheet_name="Bankwise_Growth", index=False)
-        rankings.to_excel(writer, sheet_name="Latest_Rankings", index=False)
-        summary.to_excel(writer, sheet_name="Sector_Summary", index=False)
+        loan_metrics = [
+            ("total_loan", "Total loan"),
+            ("loan_to_customers", "Loan to customers"),
+            ("loan_to_bfis", "Loan to BFIs"),
+            ("nba_mn", "NBA"),
+            ("investment_govt_sec_mn", "Investment in Govt. Sec"),
+            ("investment_shares_other_mn", "Investment in Shares and Other"),
+        ]
+        pl_metrics = [
+            ("nii_mn", "NII"),
+            ("commission_income_mn", "Commission and Discount Income"),
+            ("llp_exp_mn", "LLP Exp"),
+            ("hr_exp_excl_bonus_mn", "HR Exp (excl. Bonus)"),
+            ("opex_mn", "Opex"),
+            ("loan_writeoff_mn", "Loan W/f"),
+        ]
+        bs_pl_metrics = [
+            ("net_profit_mn", "Net Profit"),
+            ("other_operating_income_mn", "Other Operating Income"),
+            ("capital", "Capital"),
+            ("general_reserve", "General Reserve"),
+            ("llp_fund", "LLP fund"),
+            ("debenture", "Debenture"),
+        ]
+        row = 5
+        row = write_table(ws, row, "Bank's name", "Deposit (Rs. in Bn)", deposit_metrics, build_block_rows(df, periods, banks, deposit_metrics, "total_deposit"), formats)
+        row = write_table(ws, row, "Others (Loan and other)", "Others (Loan and other)", loan_metrics, build_block_rows(df, periods, banks, loan_metrics, "total_loan"), formats)
+        row = write_table(ws, row, "PL Items (Rs. in Mn)", "PL Items (Rs. in Mn)", pl_metrics, build_block_rows(df, periods, banks, pl_metrics, "nii_mn"), formats)
+        row = write_table(ws, row, "PL Items / Balance sheet items", "PL Items (Rs. in Mn) / Balance sheet items (Rs. in Bn)", bs_pl_metrics, build_block_rows(df, periods, banks, bs_pl_metrics, "net_profit_mn"), formats)
+        savings_rows = build_ratio_rows(df, periods, banks, "savings_deposit_ratio", "savings_deposit_ratio")
+        row = write_table(ws, row, "Ratios (Savings Deposit)", "Deposit (Rs. in Bn)", [("savings_deposit_ratio", "Current Month")], savings_rows, formats, is_ratio=True)
+        ldr_rows = build_ratio_rows(df, periods, banks, "loan_to_deposit_ratio", "loan_to_deposit_ratio")
+        row = write_table(ws, row, "Ratios (Loan to Deposit Ratio)", "Deposit (Rs. in Bn)", [("loan_to_deposit_ratio", "Current Month")], ldr_rows, formats, is_ratio=True)
+        ws.set_zoom(70)
+        ws.freeze_panes(5, 2)
+        ws.set_column(0, 0, 14)
+        ws.set_column(1, 1, 8)
+        ws.set_column(2, 60, 12)
+        ws.repeat_rows(0, 4)
+        df.to_excel(writer, sheet_name="Extracted_C8_C9", index=False)
         manifest_df.to_excel(writer, sheet_name="Manifest", index=False)
-        for sheet in ["Bankwise_Growth", "Latest_Rankings", "Sector_Summary", "Manifest", "Source"]:
-            if sheet not in writer.sheets:
-                continue
-            w = writer.sheets[sheet]
-            w.freeze_panes(1, 0)
-            w.autofilter(0, 0, 0, 30)
-            w.set_row(0, None, header_fmt)
-            w.set_column(0, 0, 13)
-            w.set_column(1, 8, 15)
-            w.set_column(9, 12, 16)
-            w.set_column(13, 13, 48, text_fmt)
-            w.set_column(14, 16, 18, num_fmt)
-            w.set_column(17, 22, 16, pct_fmt)
+        source_df = pd.DataFrame([
+            {"Item": "NRB Monthly Statistics URL", "Value": SOURCE_URL},
+            {"Item": "Govt. Sec source override", "Value": "investment_govt_sec_mn is read from C8 row: SHARE & OTHER INVESTMENT"},
+            {"Item": "Sheets read", "Value": "C8 and C9 only"},
+        ])
+        source_df.to_excel(writer, sheet_name="Source_Map", index=False)
 
 
 def run_pipeline(args):
@@ -378,31 +579,61 @@ def run_pipeline(args):
     processed_dir.mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
     mapping = load_mapping(repo_root / args.mapping)
-    periods = parse_monthly_files(args.source_url, max_pages=args.max_pages, months=args.months)
-    if not periods:
-        raise RuntimeError("No monthly XLSX links found on the NRB page.")
-    manifest_records = []
-    downloaded_any = False
-    for period in periods:
-        file_name = f"{period.slug}.xlsx"
-        raw_path = raw_dir / file_name
-        downloaded = download_file(period.xlsx_url, raw_path)
-        downloaded_any = downloaded_any or downloaded
-        fields = fiscal_fields(period.bs_year, period.bs_month)
-        manifest_records.append({
+    if args.local_xlsx:
+        path = Path(args.local_xlsx).resolve()
+        period = MonthlyFile(args.local_period_text, args.local_bs_year, args.local_bs_month, args.local_label, "local")
+        periods = [period]
+        manifest_records = [{
             "period_key": period.period_key,
             "period_text": period.period_text,
             "bs_year": period.bs_year,
             "bs_month": period.bs_month,
-            "fiscal_year": fields["fiscal_year"],
-            "fiscal_month": fields["fiscal_month"],
-            "fiscal_quarter": fields["fiscal_quarter"],
-            "xlsx_url": period.xlsx_url,
-            "local_file": str(raw_path.relative_to(repo_root)),
-            "downloaded_this_run": downloaded,
-        })
+            "fiscal_year": fiscal_fields(period.bs_year, period.bs_month)["fiscal_year"],
+            "fiscal_month": fiscal_fields(period.bs_year, period.bs_month)["fiscal_month"],
+            "fiscal_quarter": fiscal_fields(period.bs_year, period.bs_month)["fiscal_quarter"],
+            "xlsx_url": "local",
+            "local_file": str(path),
+            "downloaded_this_run": False,
+        }]
+        extracted = extract_monthly_c8_c9(path, period, mapping)
+        all_months_df = extracted
+        downloaded_any = False
+    else:
+        periods = parse_monthly_files(args.source_url, max_pages=args.max_pages, months=args.months)
+        if not periods:
+            raise RuntimeError("No monthly XLSX links found on the NRB page.")
+        manifest_records = []
+        downloaded_any = False
+        all_extracted = []
+        for period in periods:
+            file_name = f"{period.slug}.xlsx"
+            raw_path = raw_dir / file_name
+            downloaded = download_file(period.xlsx_url, raw_path)
+            downloaded_any = downloaded_any or downloaded
+            fields = fiscal_fields(period.bs_year, period.bs_month)
+            manifest_records.append({
+                "period_key": period.period_key,
+                "period_text": period.period_text,
+                "bs_year": period.bs_year,
+                "bs_month": period.bs_month,
+                "fiscal_year": fields["fiscal_year"],
+                "fiscal_month": fields["fiscal_month"],
+                "fiscal_quarter": fields["fiscal_quarter"],
+                "xlsx_url": period.xlsx_url,
+                "local_file": str(raw_path.relative_to(repo_root)),
+                "downloaded_this_run": downloaded,
+            })
+            extracted = extract_monthly_c8_c9(raw_path, period, mapping)
+            if not extracted.empty:
+                all_extracted.append(extracted)
+        if not all_extracted:
+            raise RuntimeError("No C8/C9 bank-wise data was extracted from downloaded files.")
+        all_months_df = pd.concat(all_extracted, ignore_index=True)
     manifest_df = pd.DataFrame(manifest_records).sort_values("period_key")
     manifest_df.to_csv(processed_dir / "nrb_monthly_manifest.csv", index=False)
+    all_months_df.to_csv(processed_dir / "nrb_c8_c9_extracted.csv", index=False)
+    latest_period = max(periods, key=lambda p: p.order).period_key
+    output_path = reports_dir / f"Development_Bank_Industry_Analysis_{latest_period}.xlsx"
     previous_state_path = state_dir / "latest.json"
     previous_state = {}
     if previous_state_path.exists():
@@ -410,49 +641,38 @@ def run_pipeline(args):
             previous_state = json.loads(previous_state_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             previous_state = {}
-    expected_report = reports_dir / f"NRB_BFI_Growth_Report_{periods[0].period_key}.xlsx"
-    if (not args.force and not downloaded_any and previous_state.get("latest_period") == periods[0].period_key and expected_report.exists()):
-        print(json.dumps({"status": "no_new_data", "latest_period": periods[0].period_key, "report": str(expected_report.relative_to(repo_root))}, indent=2))
+    if not args.force and not args.local_xlsx and not downloaded_any and previous_state.get("latest_period") == latest_period and output_path.exists():
+        print(json.dumps({"status": "no_new_data", "latest_period": latest_period, "report": str(output_path.relative_to(repo_root))}, indent=2))
         return
-    all_long = []
-    period_by_file = {Path(row["local_file"]).name: next(p for p in periods if p.period_key == row["period_key"]) for row in manifest_records}
-    for row in manifest_records:
-        path = repo_root / row["local_file"]
-        period = period_by_file[path.name]
-        extracted = extract_bank_metric_long(path, period, mapping)
-        if not extracted.empty:
-            all_long.append(extracted)
-    if not all_long:
-        raise RuntimeError("Downloaded files were found, but no bank-wise metric tables could be extracted. Check the workbook layout.")
-    long_df = pd.concat(all_long, ignore_index=True)
-    long_df.to_csv(processed_dir / "nrb_bankwise_long.csv", index=False)
-    growth_df = compute_growth(long_df)
-    growth_df.to_csv(processed_dir / "nrb_bankwise_growth.csv", index=False)
-    latest_period = periods[0].period_key
-    output_path = reports_dir / f"NRB_BFI_Growth_Report_{latest_period}.xlsx"
-    write_report(growth_df, manifest_df, args.target_bank, output_path)
+    write_industry_report(all_months_df, manifest_df, output_path, args.target_bank)
     state = {
-        "latest_period": periods[0].period_key,
-        "latest_url": periods[0].xlsx_url,
+        "latest_period": latest_period,
         "downloaded_any": downloaded_any,
         "report": str(output_path.relative_to(repo_root)),
         "raw_file_count": len(manifest_records),
+        "investment_govt_sec_source": "C8 row SHARE & OTHER INVESTMENT",
     }
-    (state_dir / "latest.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+    previous_state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
     print(json.dumps(state, indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-url", default="https://www.nrb.org.np/category/monthly-statistics/?department=bfr")
+    parser.add_argument("--source-url", default=SOURCE_URL)
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--mapping", default="config/bfi_mapping.csv")
     parser.add_argument("--months", type=int, default=24)
     parser.add_argument("--max-pages", type=int, default=8)
     parser.add_argument("--target-bank", default="Kamana")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--local-xlsx", default=None)
+    parser.add_argument("--local-bs-year", type=int, default=2082)
+    parser.add_argument("--local-bs-month", type=int, default=11)
+    parser.add_argument("--local-label", default="Mid Mar, 2026")
+    parser.add_argument("--local-period-text", default="2082-11(Mid Mar, 2026)")
     args = parser.parse_args()
     run_pipeline(args)
+
 
 if __name__ == "__main__":
     main()
