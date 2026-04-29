@@ -11,6 +11,16 @@
       "C9",
       "C10"
     ],
+    "analysis_sheets": [
+      "Industry Analysis",
+      "Industry Overall",
+      "Dev_Product_Analysis",
+      "Dev_Deposit_Mix",
+      "Dev_Liquidity_Investment",
+      "Dev_Profitability",
+      "Dev_Risk_Flags",
+      "Dev_Scorecard"
+    ],
     "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
     "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
     "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others",
