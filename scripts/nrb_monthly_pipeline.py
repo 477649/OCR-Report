@@ -700,7 +700,7 @@ def write_development_bank_report(
 
         title_fmt = workbook.add_format({"bold": True, "font_size": 11, "font_name": "Times New Roman"})
         big_title_fmt = workbook.add_format({"bold": True, "font_size": 14, "font_name": "Times New Roman"})
-        header_note_fmt = workbook.add_format({"bold": True, "font_size": 11, "font_name": "Times New Roman", "italic": True})
+        header_note_fmt = workbook.add_format({"bold": True, "font_size": 11, "font_name": "Times New Roman", "italic": True, "align": "right", "valign": "vcenter"})
         orange = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#F4B183", "border": 1})
         blue = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#0070C0", "font_color": "#FFFFFF", "border": 1, "text_wrap": True})
         green = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#A9D18E", "border": 1})
@@ -765,7 +765,7 @@ def write_development_bank_report(
 
         ws.write(0, 0, "Kamana Sewa Bikas Bank Ltd.", title_fmt)
         ws.write(1, 0, report_period_title, title_fmt)
-        ws.write(1, 2, figure_note, header_note_fmt)
+        
 
         def write_wide_section(start_row: int, section_label: str, rank_label: str, metrics: list[str], rank_metric: str, section_fmt) -> int:
             ws.merge_range(start_row, 0, start_row, 1, "Bank's name", orange)
@@ -850,6 +850,7 @@ def write_development_bank_report(
         ws.set_column(0, 0, 13)
         ws.set_column(1, 1, 7)
         ws.set_column(2, 2 + 6 * len(blocks), 11)
+        ws.merge_range(3, 42, 3, 43, figure_note, header_note_fmt)
         for r in range(2, row + 1):
             ws.set_row(r, 20)
         ws.set_row(3, 38)
@@ -1248,6 +1249,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
             "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
             "header_note": "Amount in Billion",
+            "header_note_position_industry_analysis": "AQ4:AR4",
                     },
     }
     state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
