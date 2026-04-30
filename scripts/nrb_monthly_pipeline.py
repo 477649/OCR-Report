@@ -102,6 +102,21 @@ REPORT_BANK_DEFAULT_ORDER = [
     "Mukti", "Garima", "Jyoti", "Shine", "LumbiniDB", "Kamana", "Mahalaxmi", "Shangrila"
 ]
 
+NEPALI_MONTHS = {
+    1: "Baishakh",
+    2: "Jestha",
+    3: "Ashadh",
+    4: "Shrawan",
+    5: "Bhadra",
+    6: "Ashwin",
+    7: "Kartik",
+    8: "Mangsir",
+    9: "Poush",
+    10: "Magh",
+    11: "Falgun",
+    12: "Chaitra",
+}
+
 
 @dataclass(frozen=True)
 class MonthlyFile:
@@ -568,15 +583,22 @@ def get_period_orders(all_data: pd.DataFrame) -> dict[str, int | None]:
     }
 
 
+def nepali_month_name(bs_month: int | float | str | None) -> str:
+    try:
+        month_num = int(bs_month)
+    except (TypeError, ValueError):
+        return "N/A"
+    return NEPALI_MONTHS.get(month_num, f"Month {month_num}")
+
+
 def period_display_name(all_data: pd.DataFrame, order: int | None) -> str:
     if order is None:
         return "N/A"
     sub = all_data[all_data["period_order"] == order]
     if sub.empty:
         return "N/A"
-    text = str(sub.iloc[0]["period_text"])
-    m = PERIOD_RE.search(text)
-    return m.group("label") if m else str(sub.iloc[0]["period_key"])
+    row = sub.iloc[0]
+    return f"{nepali_month_name(row.get('bs_month'))} {int(row['bs_year'])}"
 
 
 def select_report_banks(all_data: pd.DataFrame, mapping: pd.DataFrame, include_all_dev_banks: bool = False) -> list[str]:
@@ -624,14 +646,28 @@ def make_rank_map(all_data: pd.DataFrame, codes: list[str], order: int | None, m
 
 
 def fmt_period_title(all_data: pd.DataFrame, period_orders: dict[str, int | None]) -> str:
-    latest_order = period_orders["current"]
-    sub = all_data[all_data["period_order"] == latest_order].iloc[0]
-    text = str(sub["period_text"])
-    m = PERIOD_RE.search(text)
-    if m:
-        return f"Industry Analysis {m.group('label').split(',')[0].strip()}"
-    return f"Industry Analysis {sub['period_key']}"
+    return f"Industry Analysis {period_display_name(all_data, period_orders.get('current'))}"
 
+def period_header_labels(all_data: pd.DataFrame, period_orders: dict[str, int | None]) -> dict[str, str]:
+    return {
+        "This Month": period_display_name(all_data, period_orders.get("current")),
+        "Last Month": period_display_name(all_data, period_orders.get("last_month")),
+        "Last Year End": period_display_name(all_data, period_orders.get("last_year_end")),
+        "MoM Change (Rs.)": "MoM Change (Rs.)",
+        "YTD Change (Rs.)": "YTD Change (Rs.)",
+        "Last Year Corresponding": period_display_name(all_data, period_orders.get("last_year_corresponding")),
+        "YoY Change": "YoY Change",
+    }
+
+
+def ratio_header_labels(all_data: pd.DataFrame, period_orders: dict[str, int | None]) -> list[str]:
+    return [
+        period_display_name(all_data, period_orders.get("current")),
+        period_display_name(all_data, period_orders.get("last_month")),
+        period_display_name(all_data, period_orders.get("last_year_end")),
+        period_display_name(all_data, period_orders.get("last_year_corresponding")),
+        "Increment % this year",
+    ]
 
 def write_development_bank_report(
     all_data: pd.DataFrame,
@@ -649,12 +685,13 @@ def write_development_bank_report(
     blocks = [
         "This Month", "Last Month", "Last Year End", "MoM Change (Rs.)", "YTD Change (Rs.)", "Last Year Corresponding", "YoY Change"
     ]
+    display_blocks = period_header_labels(all_data, period_orders)
 
     deposits_cols = ["Total Deposit", "Current", "Savings", "Fixed", "Call Deposits", "Others"]
     loan_cols = ["Total loan", "Loan to customers", "Loan to BFIs", "NBA", "Investment in Govt. Sec", "Investment in Shares and Other"]
     pl_cols = ["NII", "Commission and Discount Income", "LLP Exp", "HR Exp (excl. Bonus)", "Opex", "Loan W/f"]
     bs_cols = ["Net Profit", "Other Operating Income", "Capital", "General Reserve", "LLP fund", "Debenture"]
-    ratio_cols = ["Current Month", "Last Month", "Ashadh 2082", "Corresponding Year", "Increment % this year"]
+    ratio_cols = ratio_header_labels(all_data, period_orders)
 
     import xlsxwriter
 
@@ -712,9 +749,11 @@ def write_development_bank_report(
         # Create Industry Overall first so it appears as the first worksheet tab.
         ws2 = workbook.add_worksheet("Industry Overall")
         writer.sheets["Industry Overall"] = ws2
+        ws2.hide_gridlines(2)
 
         ws = workbook.add_worksheet("Industry Analysis")
         writer.sheets["Industry Analysis"] = ws
+        ws.hide_gridlines(2)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.set_zoom(55)
@@ -728,7 +767,7 @@ def write_development_bank_report(
             ws.merge_range(start_row, 0, start_row, 1, "Bank's name", orange)
             col = 2
             for block in blocks:
-                ws.merge_range(start_row, col, start_row, col + len(metrics) - 1, block, group_format(block))
+                ws.merge_range(start_row, col, start_row, col + len(metrics) - 1, display_blocks[block], group_format(block))
                 col += len(metrics)
 
             ws.write(start_row + 1, 0, section_label, left_hdr if section_fmt is None else section_fmt)
@@ -863,7 +902,7 @@ def write_development_bank_report(
         ws2.merge_range(1, 0, 1, 7, "Incremental Industry Analysis", big_title_fmt)
         ws2.write(2, 0, "Particulars", blue)
         for c, h in enumerate(blocks, start=1):
-            ws2.write(2, c, h, group_format(h))
+            ws2.write(2, c, display_blocks[h], group_format(h))
         ws2.set_column(0, 0, 34)
         ws2.set_column(1, 7, 16)
 
@@ -1065,6 +1104,7 @@ def write_development_bank_report(
         risk_df = pd.DataFrame(risk_records)
         ws7 = workbook.add_worksheet("Dev_Risk_Flags")
         writer.sheets["Dev_Risk_Flags"] = ws7
+        ws7.hide_gridlines(2)
         ws7.write(0, 0, "Development Bank Risk Flags", big_title_fmt)
         risk_headers = list(risk_df.columns)
         for c, h in enumerate(risk_headers):
@@ -1194,6 +1234,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
         "logic": {
             "sheets_read": ["C8", "C9", "C10"],
             "analysis_sheets": ["Industry Overall", "Industry Analysis", "Dev_Risk_Flags"],
+            "month_header_format": "Dynamic BS period headers: current=Falgun 2082 style, last month=Magh 2082 style, last year end=Ashadh 2082 style, last year corresponding=Falgun 2081 style.",
+            "gridlines": "Hidden in all output sheets",
             "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
             "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
             "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others",
