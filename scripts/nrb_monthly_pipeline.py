@@ -75,10 +75,10 @@ DEFAULT_MAPPING = [
     ("Jyoti", "Development Bank", "Jyoti Bikas Bank Limited", 1),
     ("Shine", "Development Bank", "Shine Resunga Development Bank Limited", 1),
     ("LumbiniDB", "Development Bank", "Lumbini Bikas Bank Limited", 1),
-    ("Sindhu", "Finance Company", "Sindhu Bikas Bank Limited", 0),
-    ("Salapa", "Finance Company", "Salapa Bikas Bank Limited", 0),
-    ("saptakoshi", "Finance Company", "Saptakoshi Development Bank Limited", 0),
-    ("GreenDB", "Finance Company", "Green Development Bank Limited", 0),
+    ("Sindhu", "Development Bank", "Sindhu Bikas Bank Limited", 0),
+    ("Salapa", "Development Bank", "Salapa Bikas Bank Limited", 0),
+    ("saptakoshi", "Development Bank", "Saptakoshi Development Bank Limited", 0),
+    ("GreenDB", "Development Bank", "Green Development Bank Limited", 0),
     ("NFL", "Finance Company", "Nepal Finance Limited", 0),
     ("NSML", "Finance Company", "Nepal Share Markets and Finance Limited", 0),
     ("GURKHAFC", "Finance Company", "Gurkhas Finance Limited", 0),
@@ -510,7 +510,7 @@ def extract_one_file(path: Path, period: MonthlyFile, mapping: pd.DataFrame) -> 
         data["Call Deposit Ratio"] = safe_div(data["Call Deposits"], data["Total Deposit"])
         data["Other Deposit Ratio"] = safe_div(data["Others"], data["Total Deposit"])
         data["CASA Ratio"] = safe_div(optional_sum(data["Current"], data["Savings"]), data["Total Deposit"])
-        data["Loan to Deposit Ratio"] = safe_div(data["Loan to customers"], data["Total Deposit"])
+        data["Loan to Deposit Ratio"] = safe_div(data["Total loan"], data["Total Deposit"])
         data["Full Loan to Deposit Ratio"] = safe_div(data["Total loan"], data["Total Deposit"])
         data["Liquid Assets"] = optional_sum(data["Liquid Funds"], None if data["Investment in Govt. Sec"] is None else data["Investment in Govt. Sec"] / 1000.0)
         data["Liquidity Ratio"] = safe_div(data["Liquid Assets"], data["Total Deposit"])
@@ -850,7 +850,7 @@ def write_development_bank_report(
         ws.set_column(0, 0, 13)
         ws.set_column(1, 1, 7)
         ws.set_column(2, 2 + 6 * len(blocks), 11)
-        ws.merge_range(3, 42, 3, 43, figure_note, header_note_fmt)
+        ws.merge_range(1, 42, 1, 43, figure_note, header_note_fmt)
         for r in range(2, row + 1):
             ws.set_row(r, 20)
         ws.set_row(3, 38)
@@ -1249,7 +1249,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
             "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
             "header_note": "Amount in Billion",
-            "header_note_position_industry_analysis": "AQ4:AR4",
+            "header_note_position_industry_analysis": "AQ2:AR2",
                     },
     }
     state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
