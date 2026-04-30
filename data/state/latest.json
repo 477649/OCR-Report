@@ -26,6 +26,6 @@
     "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
     "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
     "header_note": "Amount in Billion",
-    "header_note_position_industry_analysis": "AQ4:AR4"
+    "header_note_position_industry_analysis": "AQ2:AR2"
   }
 }
