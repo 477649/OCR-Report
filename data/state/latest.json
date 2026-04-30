@@ -16,6 +16,8 @@
       "Industry Analysis",
       "Dev_Risk_Flags"
     ],
+    "month_header_format": "Dynamic BS period headers: current=Falgun 2082 style, last month=Magh 2082 style, last year end=Ashadh 2082 style, last year corresponding=Falgun 2081 style.",
+    "gridlines": "Hidden in all output sheets",
     "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
     "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
     "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others",
