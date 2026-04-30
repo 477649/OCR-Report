@@ -39,7 +39,7 @@ A new NRB monthly BFI file was detected.
 Latest Entry:
 {latest_title}
 
-The Excel report has been generated and attached.
+The latest Industry Analysis report has been generated and attached.
 
 This is an auto-generated email.
 """
