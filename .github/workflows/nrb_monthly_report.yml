@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
   schedule:
     # GitHub cron runs in UTC.
-    # 03:30 UTC = 09:15 Nepal Time.
-    - cron: "30 3 * * 1-5"
+    # Runs every 5 minutes, all 7 days.
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: write
@@ -13,6 +13,7 @@ permissions:
 jobs:
   build-report:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -55,14 +56,21 @@ jobs:
           from pathlib import Path
 
           state = Path("data/state/latest.json")
+
           if state.exists():
               data = json.loads(state.read_text(encoding="utf-8"))
               report = data.get("report")
+
               if report and Path(report).exists():
                   print(report)
                   raise SystemExit
 
-          reports = sorted(Path("reports").glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+          reports = sorted(
+              Path("reports").glob("*.xlsx"),
+              key=lambda p: p.stat().st_mtime,
+              reverse=True
+          )
+
           if not reports:
               raise RuntimeError("No Excel report found in reports folder.")
 
