@@ -6,7 +6,7 @@ What this script does:
 1. Reads NRB Monthly Statistics page and downloads latest XLSX files.
 2. Reads ONLY sheets C8, C9 and C10 from each monthly workbook.
 3. Extracts bank-wise values using bank codes in the sheet header row.
-4. Builds four report sheets only: Industry Overall, Industry Analysis, Dev_Risk_Flags, and Dev_Scorecard.
+4. Builds three report sheets only: Industry Overall, Industry Analysis, and Dev_Risk_Flags.
 
 Important extraction rules:
 - Deposit details are taken from C8 rows under DEPOSITS:
@@ -665,7 +665,10 @@ def write_development_bank_report(
         big_title_fmt = workbook.add_format({"bold": True, "font_size": 14, "font_name": "Times New Roman"})
         orange = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#F4B183", "border": 1})
         blue = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#0070C0", "font_color": "#FFFFFF", "border": 1, "text_wrap": True})
-        green = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#92D050", "border": 1})
+        green = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#A9D18E", "border": 1})
+        last_month_teal = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#4BACC6", "border": 1})
+        ytd_green = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#C5E0B4", "border": 1})
+        dark_blue = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#1F4E79", "font_color": "#FFFFFF", "border": 1})
         yellow = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#FFC000", "border": 1})
         peach = workbook.add_format({"bold": True, "bg_color": "#F8CBAD", "border": 1, "text_wrap": True})
         left_hdr = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#0070C0", "font_color": "#FFFFFF", "border": 1, "text_wrap": True})
@@ -690,9 +693,19 @@ def write_development_bank_report(
                 ws.write_number(row, col, float(val), fmt)
 
         def group_format(block: str):
+            if block == "This Month":
+                return orange
+            if block == "Last Month":
+                return last_month_teal
             if block == "Last Year End":
                 return green
-            if block in {"MoM Change (Rs.)", "YTD Change (Rs.)", "YoY Change"}:
+            if block == "MoM Change (Rs.)":
+                return yellow
+            if block == "YTD Change (Rs.)":
+                return ytd_green
+            if block == "Last Year Corresponding":
+                return dark_blue
+            if block == "YoY Change":
                 return yellow
             return orange
 
@@ -845,10 +858,12 @@ def write_development_bank_report(
             return result
 
         ws2.set_zoom(90)
-        ws2.freeze_panes(3, 1)
-        ws2.merge_range(0, 0, 0, 7, "Incremental Industry Analysis", big_title_fmt)
-        for c, h in enumerate(["Particulars"] + blocks):
-            ws2.write(1, c, h, blue)
+        ws2.freeze_panes(4, 1)
+        ws2.merge_range(0, 0, 0, 7, fmt_period_title(all_data, period_orders), big_title_fmt)
+        ws2.merge_range(1, 0, 1, 7, "Incremental Industry Analysis", big_title_fmt)
+        ws2.write(2, 0, "Particulars", blue)
+        for c, h in enumerate(blocks, start=1):
+            ws2.write(2, c, h, group_format(h))
         ws2.set_column(0, 0, 34)
         ws2.set_column(1, 7, 16)
 
@@ -871,7 +886,7 @@ def write_development_bank_report(
                     write_value(ws2, i, j, vals.get(block), cell_fmt, blank_bold if is_bold else blank_fmt)
             return start_row + len(rows) + 2
 
-        overall_row = 2
+        overall_row = 3
         overall_row = write_overall_block(overall_row, "Deposits", "Total Deposit", num)
         overall_row = write_overall_block(overall_row, "Loan", "Total loan", num)
 
@@ -964,7 +979,7 @@ def write_development_bank_report(
         profit_rank = current_rank("Net Profit", True)
 
         # ------------------------------------------------------------------
-        # Dev_Risk_Flags and Dev_Scorecard
+        # Dev_Risk_Flags
         # ------------------------------------------------------------------
         risk_records: list[dict[str, Any]] = []
         sav_series = pd.Series(current_dev_values("Savings Deposit Ratio"), dtype="float64")
@@ -1045,7 +1060,6 @@ def write_development_bank_report(
                 "Top Product %": conc["top1_ratio"],
                 "Top 3 Product Concentration": top3,
                 **flags,
-                "Risk Summary": "; ".join(summary_parts),
             })
 
         risk_df = pd.DataFrame(risk_records)
@@ -1068,7 +1082,7 @@ def write_development_bank_report(
                 base_fmt = cell_bold if is_kamana else cell
                 if h in {"Risk Score"}:
                     write_value(ws7, r_idx, c, v, int_bold if is_kamana else int_fmt, blank_bold if is_kamana else blank_fmt)
-                elif h in {"Bank", "Risk Level", "Top Product", "Risk Summary"} or h.endswith("Flag"):
+                elif h in {"Bank", "Risk Level", "Top Product"} or h.endswith("Flag"):
                     fmt = base_fmt
                     if h.endswith("Flag") or h == "Risk Level":
                         if v == "High":
@@ -1083,192 +1097,10 @@ def write_development_bank_report(
                 else:
                     write_value(ws7, r_idx, c, v, num_bold if is_kamana else num, blank_bold if is_kamana else blank_fmt)
         ws7.set_column(0, len(risk_headers) - 1, 16)
-        ws7.set_column(risk_headers.index("Risk Summary"), risk_headers.index("Risk Summary"), 55)
         ws7.freeze_panes(3, 1)
 
-        score_records: list[dict[str, Any]] = []
-        nii_yield_values: dict[str, float] = {}
-        cost_values: dict[str, float] = {}
-        risk_values: dict[str, float] = {}
-
-        for rec in risk_records:
-            rc = str(rec["Bank"])
-            rnii = value_for(all_data, rc, current_order, "NII")
-            rloan = value_for(all_data, rc, current_order, "Total loan")
-            ryield = safe_div(rnii, None if rloan is None else rloan * 1000)
-            if ryield is not None:
-                nii_yield_values[rc] = ryield
-            rhr = value_for(all_data, rc, current_order, "HR Exp (excl. Bonus)")
-            rox = value_for(all_data, rc, current_order, "Opex")
-            rcost = safe_div(optional_sum(rhr, rox), rnii)
-            if rcost is not None:
-                cost_values[rc] = rcost
-            risk_values[rc] = rec["Risk Score"]
-
-        def choose_growth_compare_order() -> tuple[int | None, str]:
-            if period_orders.get("last_year_corresponding") is not None:
-                return period_orders.get("last_year_corresponding"), "YoY"
-            if period_orders.get("last_year_end") is not None:
-                return period_orders.get("last_year_end"), "YTD"
-            if period_orders.get("last_month") is not None:
-                return period_orders.get("last_month"), "MoM"
-            return None, "N/A"
-
-        growth_compare_order, growth_basis = choose_growth_compare_order()
-
-        def growth_score_components(metric: str) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
-            """Return absolute growth, percentage growth, and blended growth scores.
-
-            Blended growth avoids favouring only large banks:
-            70% = percentage growth score, 30% = absolute rupee growth score.
-            If only one growth measure is available, the available score is used.
-            """
-            abs_growth: dict[str, float] = {}
-            pct_growth: dict[str, float] = {}
-            for bc in banks:
-                cur_v = value_for(all_data, bc, current_order, metric)
-                prev_v = value_for(all_data, bc, growth_compare_order, metric)
-                if cur_v is None or prev_v is None:
-                    continue
-                abs_growth[bc] = cur_v - prev_v
-                if prev_v != 0:
-                    pct_growth[bc] = (cur_v / prev_v) - 1
-            abs_scores = {bc: score_from_dict(abs_growth, bc, True) for bc in banks}
-            pct_scores = {bc: score_from_dict(pct_growth, bc, True) for bc in banks}
-            blended: dict[str, float] = {}
-            for bc in banks:
-                ps = pct_scores.get(bc)
-                av = abs_scores.get(bc)
-                if ps is not None and av is not None:
-                    blended[bc] = (ps * 0.70) + (av * 0.30)
-                elif ps is not None:
-                    blended[bc] = ps
-                elif av is not None:
-                    blended[bc] = av
-            return abs_growth, pct_growth, abs_scores, pct_scores, blended
-
-        dep_abs_g, dep_pct_g, _dep_abs_score, _dep_pct_score, dep_growth_score = growth_score_components("Total Deposit")
-        loan_abs_g, loan_pct_g, _loan_abs_score, _loan_pct_score, loan_growth_score = growth_score_components("Total loan")
-        profit_abs_g, profit_pct_g, _profit_abs_score, _profit_pct_score, profit_growth_score = growth_score_components("Net Profit")
-        nii_abs_g, nii_pct_g, _nii_abs_score, _nii_pct_score, nii_growth_score = growth_score_components("NII")
-
-        def rank_from_dict(vals: dict[str, float], positive: bool = True) -> dict[str, int | None]:
-            if not vals:
-                return {bc: None for bc in banks}
-            arr = sorted(vals.items(), key=lambda item: item[1], reverse=positive)
-            ranks: dict[str, int | None] = {bc: None for bc in banks}
-            last_val = None
-            last_rank = 0
-            for idx, (bc, val) in enumerate(arr, start=1):
-                if last_val is not None and val == last_val:
-                    rank = last_rank
-                else:
-                    rank = idx
-                ranks[bc] = rank
-                last_val = val
-                last_rank = rank
-            return ranks
-
-        dep_growth_rank = rank_from_dict(dep_growth_score, True)
-        loan_growth_rank = rank_from_dict(loan_growth_score, True)
-        profit_growth_rank = rank_from_dict(profit_growth_score, True)
-        nii_growth_rank = rank_from_dict(nii_growth_score, True)
-        loan_rank_map = current_rank("Total loan", True)
-
-        for code in banks:
-            components = {
-                "Deposit Scale Score": percentile_score("Total Deposit", code, True),
-                "Loan Scale Score": percentile_score("Total loan", code, True),
-                "Deposit Growth Score": dep_growth_score.get(code),
-                "Loan Growth Score": loan_growth_score.get(code),
-                "Profit Growth Score": profit_growth_score.get(code),
-                "NII Growth Score": nii_growth_score.get(code),
-                "Savings Mix Score": percentile_score("Savings Deposit Ratio", code, True),
-                "CASA Score": percentile_score("CASA Ratio", code, True),
-                "Liquidity Score": percentile_score("Liquidity Ratio", code, True),
-                "Net Profit Score": percentile_score("Net Profit", code, True),
-                "NII Yield Score": score_from_dict(nii_yield_values, code, True),
-                "Cost Efficiency Score": score_from_dict(cost_values, code, False),
-                "Risk Control Score": score_from_dict(risk_values, code, False),
-            }
-            weights = {
-                "Deposit Scale Score": 0.07,
-                "Loan Scale Score": 0.07,
-                "Deposit Growth Score": 0.12,
-                "Loan Growth Score": 0.12,
-                "Profit Growth Score": 0.08,
-                "NII Growth Score": 0.06,
-                "Savings Mix Score": 0.08,
-                "CASA Score": 0.06,
-                "Liquidity Score": 0.12,
-                "Net Profit Score": 0.07,
-                "NII Yield Score": 0.05,
-                "Cost Efficiency Score": 0.05,
-                "Risk Control Score": 0.05,
-            }
-            weighted_sum = 0.0
-            weight_sum = 0.0
-            for k, wgt in weights.items():
-                if components.get(k) is not None:
-                    weighted_sum += float(components[k]) * wgt
-                    weight_sum += wgt
-            overall_score = None if weight_sum == 0 else weighted_sum / weight_sum
-            risk_rec = next((r for r in risk_records if r["Bank"] == code), {})
-            grade = "A" if overall_score is not None and overall_score >= 80 else "B" if overall_score is not None and overall_score >= 65 else "C" if overall_score is not None and overall_score >= 50 else "D"
-            score_records.append({
-                "Bank": code,
-                "Overall Score": overall_score,
-                "Grade": grade,
-                "Growth Basis": growth_basis,
-                "Deposit Rank": dep_rank.get(code),
-                "Loan Rank": loan_rank_map.get(code),
-                "Deposit Growth Rank": dep_growth_rank.get(code),
-                "Loan Growth Rank": loan_growth_rank.get(code),
-                "Profit Growth Rank": profit_growth_rank.get(code),
-                "NII Growth Rank": nii_growth_rank.get(code),
-                "Savings Ratio Rank": sav_rank.get(code),
-                "Liquidity Rank": liq_rank.get(code),
-                "NII Rank": nii_rank.get(code),
-                "Net Profit Rank": profit_rank.get(code),
-                "Risk Score": risk_rec.get("Risk Score"),
-                "Risk Level": risk_rec.get("Risk Level"),
-                "Deposit Growth %": dep_pct_g.get(code),
-                "Loan Growth %": loan_pct_g.get(code),
-                "Profit Growth %": profit_pct_g.get(code),
-                "NII Growth %": nii_pct_g.get(code),
-                "Deposit Growth Rs.": dep_abs_g.get(code),
-                "Loan Growth Rs.": loan_abs_g.get(code),
-                "Profit Growth Rs.": profit_abs_g.get(code),
-                "NII Growth Rs.": nii_abs_g.get(code),
-                **components,
-            })
-        score_df = pd.DataFrame(score_records)
-        score_df["Overall Rank"] = score_df["Overall Score"].rank(ascending=False, method="min")
-        score_df = score_df.sort_values(["Overall Rank", "Bank"])
-        ws8 = workbook.add_worksheet("Dev_Scorecard")
-        writer.sheets["Dev_Scorecard"] = ws8
-        ws8.write(0, 0, "Development Bank Ranking and Peer Scorecard", big_title_fmt)
-        score_headers = ["Overall Rank"] + [c for c in score_df.columns if c != "Overall Rank"]
-        for c, h in enumerate(score_headers):
-            ws8.write(2, c, h, blue)
-        score_num_fmt = workbook.add_format({"border": 1, "num_format": "0.0"})
-        score_num_bold = workbook.add_format({"border": 1, "bold": True, "num_format": "0.0"})
-        for r_idx, rec in enumerate(score_df.to_dict("records"), start=3):
-            is_kamana = str(rec["Bank"]).upper() == "KAMANA"
-            for c, h in enumerate(score_headers):
-                v = rec.get(h)
-                if h in {"Bank", "Grade", "Risk Level", "Growth Basis"}:
-                    ws8.write(r_idx, c, v or "", cell_bold if is_kamana else cell)
-                elif h.endswith("Score") or h == "Overall Score":
-                    write_value(ws8, r_idx, c, v, score_num_bold if is_kamana else score_num_fmt, blank_bold if is_kamana else blank_fmt)
-                elif "%" in h:
-                    write_value(ws8, r_idx, c, v, pct_bold if is_kamana else pct, blank_bold if is_kamana else blank_fmt)
-                elif "Rs." in h:
-                    write_value(ws8, r_idx, c, v, num_bold if is_kamana else num, blank_bold if is_kamana else blank_fmt)
-                else:
-                    write_value(ws8, r_idx, c, v, int_bold if is_kamana else int_fmt, blank_bold if is_kamana else blank_fmt)
-        ws8.set_column(0, len(score_headers) - 1, 16)
-        ws8.freeze_panes(3, 1)
+        # Dev_Scorecard sheet removed by request.
+        # Report output stops after Dev_Risk_Flags.
 
 
 
@@ -1361,7 +1193,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         "extracted_rows": int(len(all_data)),
         "logic": {
             "sheets_read": ["C8", "C9", "C10"],
-            "analysis_sheets": ["Industry Overall", "Industry Analysis", "Dev_Risk_Flags", "Dev_Scorecard"],
+            "analysis_sheets": ["Industry Overall", "Industry Analysis", "Dev_Risk_Flags"],
             "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
             "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
             "deposit_items": "C8 rows under DEPOSITS: a Current, b Savings, c Fixed, d Call Deposits, e Others",
@@ -1369,8 +1201,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "industry_analysis_total_loan": "C10 row Total Product wise Loan",
             "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
             "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
-            "scorecard_growth_logic": "Scale is reduced; growth scores use 70% percentage growth and 30% absolute growth, using YoY where available, then YTD, then MoM.",
-        },
+                    },
     }
     state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
     print(json.dumps(state, indent=2))
