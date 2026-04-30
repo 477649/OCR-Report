@@ -12,12 +12,8 @@
       "C10"
     ],
     "analysis_sheets": [
-      "Industry Analysis",
       "Industry Overall",
-      "Dev_Product_Analysis",
-      "Dev_Deposit_Mix",
-      "Dev_Liquidity_Investment",
-      "Dev_Profitability",
+      "Industry Analysis",
       "Dev_Risk_Flags",
       "Dev_Scorecard"
     ],
@@ -27,6 +23,7 @@
     "total_loan": "C10 row Total Product wise Loan",
     "industry_analysis_total_loan": "C10 row Total Product wise Loan",
     "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
-    "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs"
+    "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
+    "scorecard_growth_logic": "Scale is reduced; growth scores use 70% percentage growth and 30% absolute growth, using YoY where available, then YTD, then MoM."
   }
 }
