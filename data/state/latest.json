@@ -14,8 +14,7 @@
     "analysis_sheets": [
       "Industry Overall",
       "Industry Analysis",
-      "Dev_Risk_Flags",
-      "Dev_Scorecard"
+      "Dev_Risk_Flags"
     ],
     "investment_govt_sec": "C8 row a. Govt.Securities under INVESTMENT IN SECURITIES",
     "investment_shares_and_other": "C8 row SHARE & OTHER INVESTMENT",
@@ -23,7 +22,6 @@
     "total_loan": "C10 row Total Product wise Loan",
     "industry_analysis_total_loan": "C10 row Total Product wise Loan",
     "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
-    "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
-    "scorecard_growth_logic": "Scale is reduced; growth scores use 70% percentage growth and 30% absolute growth, using YoY where available, then YTD, then MoM."
+    "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs"
   }
 }
