@@ -700,6 +700,7 @@ def write_development_bank_report(
 
         title_fmt = workbook.add_format({"bold": True, "font_size": 11, "font_name": "Times New Roman"})
         big_title_fmt = workbook.add_format({"bold": True, "font_size": 14, "font_name": "Times New Roman"})
+        header_note_fmt = workbook.add_format({"bold": True, "font_size": 11, "font_name": "Times New Roman", "italic": True})
         orange = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#F4B183", "border": 1})
         blue = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#0070C0", "font_color": "#FFFFFF", "border": 1, "text_wrap": True})
         green = workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "bg_color": "#A9D18E", "border": 1})
@@ -757,11 +758,14 @@ def write_development_bank_report(
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.set_zoom(55)
-        ws.freeze_panes(5, 2)
+        ws.freeze_panes(4, 2)
+
+        report_period_title = fmt_period_title(all_data, period_orders)
+        figure_note = "Amount in Billion"
 
         ws.write(0, 0, "Kamana Sewa Bikas Bank Ltd.", title_fmt)
-        ws.write(1, 0, "FY 2082-83", title_fmt)
-        ws.write(3, 0, fmt_period_title(all_data, period_orders), title_fmt)
+        ws.write(1, 0, report_period_title, title_fmt)
+        ws.write(1, 2, figure_note, header_note_fmt)
 
         def write_wide_section(start_row: int, section_label: str, rank_label: str, metrics: list[str], rank_metric: str, section_fmt) -> int:
             ws.merge_range(start_row, 0, start_row, 1, "Bank's name", orange)
@@ -808,7 +812,7 @@ def write_development_bank_report(
                         col += 1
             return start_row + 2 + len(banks) + 2
 
-        row = 4
+        row = 2
         row = write_wide_section(row, "Deposit\n(Rs. in Bn)", "Rank", deposits_cols, "Total Deposit", None)
         row = write_wide_section(row, "Others (Loan and other)", "Rank", loan_cols, "Total loan", peach)
         row = write_wide_section(row, "PL Items\n(Rs. in Mn)", "Rank\n(NII)", pl_cols, "NII", None)
@@ -846,9 +850,9 @@ def write_development_bank_report(
         ws.set_column(0, 0, 13)
         ws.set_column(1, 1, 7)
         ws.set_column(2, 2 + 6 * len(blocks), 11)
-        for r in range(4, row + 1):
+        for r in range(2, row + 1):
             ws.set_row(r, 20)
-        ws.set_row(5, 38)
+        ws.set_row(3, 38)
 
         def agg_value(order: int | None, metric: str, selector: str) -> float | None:
             if order is None or metric not in all_data.columns:
@@ -897,12 +901,12 @@ def write_development_bank_report(
             return result
 
         ws2.set_zoom(90)
-        ws2.freeze_panes(4, 1)
-        ws2.merge_range(0, 0, 0, 7, fmt_period_title(all_data, period_orders), big_title_fmt)
-        ws2.merge_range(1, 0, 1, 7, "Incremental Industry Analysis", big_title_fmt)
-        ws2.write(2, 0, "Particulars", blue)
+        ws2.freeze_panes(2, 1)
+        ws2.merge_range(0, 0, 0, 4, report_period_title, big_title_fmt)
+        ws2.merge_range(0, 5, 0, 7, figure_note, header_note_fmt)
+        ws2.write(1, 0, "Particulars", blue)
         for c, h in enumerate(blocks, start=1):
-            ws2.write(2, c, display_blocks[h], group_format(h))
+            ws2.write(1, c, display_blocks[h], group_format(h))
         ws2.set_column(0, 0, 34)
         ws2.set_column(1, 7, 16)
 
@@ -925,7 +929,7 @@ def write_development_bank_report(
                     write_value(ws2, i, j, vals.get(block), cell_fmt, blank_bold if is_bold else blank_fmt)
             return start_row + len(rows) + 2
 
-        overall_row = 3
+        overall_row = 2
         overall_row = write_overall_block(overall_row, "Deposits", "Total Deposit", num)
         overall_row = write_overall_block(overall_row, "Loan", "Total loan", num)
 
@@ -1243,6 +1247,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "industry_analysis_total_loan": "C10 row Total Product wise Loan",
             "industry_analysis_loan_to_customers": "C10 Total Product wise Loan minus C8 b. Financial Institutions",
             "industry_overall_loan": "Full C10 Total Product wise Loan without deducting Loan to BFIs",
+            "header_note": "Amount in Billion",
                     },
     }
     state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
