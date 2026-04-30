@@ -28,14 +28,71 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Check if new NRB monthly file is available
+        id: check_nrb
+        run: |
+          python scripts/check_nrb_bfr_new_file.py
+
+      - name: Stop if no new NRB file
+        if: steps.check_nrb.outputs.new_file != 'true'
+        run: |
+          echo "No new NRB monthly file found. Report generation and email skipped."
+
       - name: Run NRB monthly pipeline
+        if: steps.check_nrb.outputs.new_file == 'true'
         run: |
           python scripts/nrb_monthly_pipeline.py \
             --repo-root . \
             --months 24 \
             --target-bank Kamana
 
+      - name: Find generated Excel report
+        if: steps.check_nrb.outputs.new_file == 'true'
+        id: find_report
+        run: |
+          REPORT_PATH=$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          state = Path("data/state/latest.json")
+          if state.exists():
+              data = json.loads(state.read_text(encoding="utf-8"))
+              report = data.get("report")
+              if report and Path(report).exists():
+                  print(report)
+                  raise SystemExit
+
+          reports = sorted(Path("reports").glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+          if not reports:
+              raise RuntimeError("No Excel report found in reports folder.")
+
+          print(reports[0])
+          PY
+          )
+
+          echo "REPORT_PATH=$REPORT_PATH"
+          echo "report_path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Send Excel report by email
+        if: steps.check_nrb.outputs.new_file == 'true'
+        env:
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          CC_EMAIL: ${{ secrets.CC_EMAIL }}
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          REPORT_PATH: ${{ steps.find_report.outputs.report_path }}
+          LATEST_TITLE: ${{ steps.check_nrb.outputs.latest_title }}
+        run: |
+          python scripts/send_report_email.py
+
+      - name: Mark latest NRB file as seen
+        if: steps.check_nrb.outputs.new_file == 'true'
+        run: |
+          mkdir -p data/state
+          printf "%s" "${{ steps.check_nrb.outputs.latest_title }}" > data/state/last_seen_month.txt
+
       - name: Commit updated data and reports
+        if: steps.check_nrb.outputs.new_file == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -43,7 +100,7 @@ jobs:
           git add data/raw data/processed data/state reports
 
           if git diff --cached --quiet; then
-            echo "No new NRB data or report changes found."
+            echo "No repository changes found."
           else
             git commit -m "Update NRB monthly BFI report"
             git push
