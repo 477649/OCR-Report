@@ -1,8 +1,8 @@
 {
-  "latest_period": "2082-11",
-  "latest_url": "https://www.nrb.org.np/contents/uploads/2026/04/Falgun_2082_Publish.xlsx",
-  "downloaded_any": false,
-  "report": "reports/Development_Bank_Industry_Analysis_2082-11.xlsx",
+  "latest_period": "2082-12",
+  "latest_url": "https://www.nrb.org.np/contents/uploads/2026/05/Chaitra_2082_Publish.xlsx",
+  "downloaded_any": true,
+  "report": "reports/Development_Bank_Industry_Analysis_2082-12.xlsx",
   "raw_file_count": 24,
   "extracted_rows": 1296,
   "logic": {
