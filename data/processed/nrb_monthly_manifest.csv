@@ -1,5 +1,4 @@
 period_key,period_text,bs_year,bs_month,fiscal_year,fiscal_month,fiscal_quarter,xlsx_url,local_file,downloaded_this_run
-2081-02,"2081-02(Mid June, 2024)",2081,2,2080/81,11,4,https://www.nrb.org.np/contents/uploads/2024/07/Jestha_2081_Publish-2.xlsx,data/raw/2081-02_Mid_June_2024.xlsx,False
 2081-03,"2081-03(Mid July, 2024)",2081,3,2080/81,12,4,https://www.nrb.org.np/contents/uploads/2024/08/Asar_2081_Publish.xlsx,data/raw/2081-03_Mid_July_2024.xlsx,False
 2081-04,"2081-04(Mid Aug, 2024)",2081,4,2081/82,1,1,https://www.nrb.org.np/contents/uploads/2024/09/Shrawan_2081_Publish-1.xlsx,data/raw/2081-04_Mid_Aug_2024.xlsx,False
 2081-05,"2081-05(Mid Sep, 2024)",2081,5,2081/82,2,1,https://www.nrb.org.np/contents/uploads/2024/10/Bhadau_2081_Publish-1.xlsx,data/raw/2081-05_Mid_Sep_2024.xlsx,False
@@ -22,4 +21,5 @@ period_key,period_text,bs_year,bs_month,fiscal_year,fiscal_month,fiscal_quarter,
 2082-10,"2082-10(Mid Feb, 2026)",2082,10,2082/83,7,3,https://www.nrb.org.np/contents/uploads/2026/03/Magh_2082_Publish-2.xlsx,data/raw/2082-10_Mid_Feb_2026.xlsx,False
 2082-11,"2082-11(Mid Mar, 2026)",2082,11,2082/83,8,3,https://www.nrb.org.np/contents/uploads/2026/04/Falgun_2082_Publish.xlsx,data/raw/2082-11_Mid_Mar_2026.xlsx,False
 2082-12,"2082-12(Mid April, 2026)",2082,12,2082/83,9,3,https://www.nrb.org.np/contents/uploads/2026/05/Chaitra_2082_Publish.xlsx,data/raw/2082-12_Mid_April_2026.xlsx,False
-2083-01,"2083-01(Mid May, 2026)",2083,1,2082/83,10,4,https://www.nrb.org.np/contents/uploads/2026/06/Baisakh_2083_Publish.xlsx,data/raw/2083-01_Mid_May_2026.xlsx,True
+2083-01,"2083-01(Mid May, 2026)",2083,1,2082/83,10,4,https://www.nrb.org.np/contents/uploads/2026/06/Baisakh_2083_Publish.xlsx,data/raw/2083-01_Mid_May_2026.xlsx,False
+2083-02,"2083-02(Mid June, 2026)",2083,2,2082/83,11,4,https://www.nrb.org.np/contents/uploads/2026/07/Jestha_2083_Publish.xlsx,data/raw/2083-02_Mid_June_2026.xlsx,True
