@@ -1,10 +1,10 @@
 {
-  "latest_period": "2083-02",
-  "latest_url": "https://www.nrb.org.np/contents/uploads/2026/07/Jestha_2083_Publish.xlsx",
+  "latest_period": "2083-03",
+  "latest_url": "https://www.nrb.org.np/contents/uploads/2026/08/Asar_2083_Publish.xlsx",
   "downloaded_any": true,
-  "report": "reports/Development_Bank_Industry_Analysis_2083-02.xlsx",
+  "report": "reports/Development_Bank_Industry_Analysis_2083-03.xlsx",
   "raw_file_count": 24,
-  "extracted_rows": 1296,
+  "extracted_rows": 1295,
   "logic": {
     "sheets_read": [
       "C8",
